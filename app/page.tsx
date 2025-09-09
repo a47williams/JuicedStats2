@@ -515,22 +515,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-neutral-100 text-neutral-900 dark:bg-neutral-900 dark:text-neutral-100">
-      {/* Header */}
-      <header className="sticky top-0 z-20 border-b border-neutral-200/40 bg-white/70 backdrop-blur dark:border-neutral-700/60 dark:bg-neutral-900/70">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-3">
-            <div className="grid h-8 w-8 place-items-center rounded-lg bg-orange-500 font-semibold text-white">JS</div>
-            <div>
-              <div className="font-semibold">JuicedStats</div>
-              <div className="text-xs text-neutral-500 dark:text-neutral-400">NBA Prop Research</div>
-            </div>
-          </div>
-          <nav className="text-sm">
-            <span className="text-neutral-500 dark:text-neutral-400">Matches: {series.length}</span>
-          </nav>
-        </div>
-      </header>
-
+      {/* Main content only — header lives in app/layout.tsx */}
       <main className="mx-auto max-w-6xl px-4 pb-24 pt-6">
         {/* Chips */}
         <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -676,6 +661,32 @@ export default function Home() {
               onChange={(e) => setEndDate(e.target.value)}
             />
           </div>
+
+          <div className="col-span-1 flex items-end gap-4 md:col-span-3">
+            <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+              <input type="checkbox" checked={postseason} onChange={(e) => setPostseason(e.target.checked)} />
+              Postseason
+            </label>
+            <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+              <input type="checkbox" checked={includeZero} onChange={(e) => setIncludeZero(e.target.checked)} />
+              Include 0-min games
+            </label>
+            <div className="ml-auto flex-1">
+              <div className="mb-1 text-xs text-neutral-500 dark:text-neutral-400">
+                Recency weight <span className="font-medium">{recency}%</span>{" "}
+                <span className="opacity-75">= equal, higher = newer count more</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={recency}
+                onChange={(e) => setRecency(Number(e.target.value))}
+                className="w-full accent-amber-500"
+              />
+            </div>
+          </div>
         </div>
 
         <div className="mb-4 flex items-center gap-3">
@@ -804,7 +815,6 @@ export default function Home() {
                   <tr key={`${g.date}-${g.opp}-${i}`} className="odd:bg-white even:bg-neutral-50 dark:odd:bg-neutral-900 dark:even:bg-neutral-900/60">
                     <td className="px-3 py-2">
                       {g.date?.slice(0, 10) ?? ""}
-                      {/* tiny badge to visualize B2B / rest */}
                       {g._isB2BSecond && (
                         <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-900 dark:bg-amber-400/15 dark:text-amber-300">
                           B2B2
@@ -839,6 +849,9 @@ export default function Home() {
             </tbody>
           </table>
         </div>
+
+        {/* Optional: Affiliates again at bottom — or remove this if you want it only once */}
+        {/* <AffiliateBanner /> */}
       </main>
     </div>
   );
