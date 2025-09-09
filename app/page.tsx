@@ -128,7 +128,9 @@ function confidenceFromEV(ev100: number, sample: number) {
 export default function Home() {
   // Form state
   const [playerText, setPlayerText] = useState(''); // placeholder only
-  const [season, setSeason] = useState<number>(new Date().getMonth() >= 9 ? new Date().getFullYear() : new Date().getFullYear() - 1); // start year
+  const [season, setSeason] = useState<number>(
+    new Date().getMonth() >= 9 ? new Date().getFullYear() : new Date().getFullYear() - 1
+  ); // NBA uses start year
   const [stat, setStat] = useState<StatKey>('Points');
   const [lastX, setLastX] = useState<string>(''); // blank = all
   const [homeAway, setHomeAway] = useState<'Any' | 'H' | 'A'>('Any');
@@ -144,7 +146,7 @@ export default function Home() {
 
   // Data
   const [players, setPlayers] = useState<PlayerOption[]>([]);
-  const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null);
+  const [selected, setSelected] = useState<{ id: number; name: string } | null>(null);
   const [showStart, setShowStart] = useState(true);
   const [games, setGames] = useState<GameRow[]>([]);
   const [busy, setBusy] = useState(false);
@@ -156,7 +158,6 @@ export default function Home() {
 
   useEffect(() => {
     const q = playerText.trim();
-    setSelectedPlayerId(null); // typing resets selection
     if (!q) { setPlayers([]); return; }
 
     const ctrl = new AbortController();
@@ -174,14 +175,18 @@ export default function Home() {
             : [];
 
         setPlayers(list);
+
+        if (selected && selected.name.toLowerCase() !== q.toLowerCase()) {
+          setSelected(null);
+        }
       } catch {}
     }, 200);
 
     return () => { clearTimeout(t); ctrl.abort(); };
-  }, [playerText]);
+  }, [playerText, selected]);
 
-  function resolvePlayerId(): number | null {
-    if (selectedPlayerId) return selectedPlayerId;
+  function resolvedPlayerId(): number | null {
+    if (selected?.id) return selected.id;
     const name = playerText.trim().toLowerCase();
     if (!name || !players.length) return null;
     const exact =
@@ -198,7 +203,7 @@ export default function Home() {
     setBusy(true);
     setGames([]);
     try {
-      const playerId = resolvePlayerId();
+      const playerId = resolvedPlayerId();
       if (!playerId) {
         setErr('Player not found');
         return;
@@ -209,8 +214,8 @@ export default function Home() {
         season,
         stat,
         lastX: lastX.trim() ? Number(lastX.trim()) : undefined,
-        homeAway: homeAway === 'Any' ? undefined : homeAway,
-        opponent: opponent === 'Any' ? undefined : opponent,
+        ha: homeAway === 'Any' ? undefined : homeAway,
+        opp: opponent === 'Any' ? undefined : opponent,
         propLine: propLine.trim() ? Number(propLine.trim()) : undefined,
         minMinutes: minMinutes.trim() ? Number(minMinutes.trim()) : undefined,
         postseason,
@@ -236,7 +241,6 @@ export default function Home() {
       const rawRows = Array.isArray(data?.rows) ? data.rows : [];
       const rows: GameRow[] = rawRows.map((r: any) => {
         if (Array.isArray(r)) {
-          // index mapping from server array shape
           const [
             date, opp, ha, minStr, pts, reb, ast, fg3m, blk, stl, turnovers,
             teamPts, oppPts, result, /*gameId*/, teamAbbr,
@@ -259,7 +263,6 @@ export default function Home() {
             result: result,
           } as GameRow;
         }
-        // object shape passthrough + defensive numeric mapping
         return {
           ...r,
           pts: n(r.pts),
@@ -325,14 +328,22 @@ export default function Home() {
     return (hits / series.length) * 100;
   }, [series, propNum]);
 
-  // EV math
+  // Pricing inputs
   const oddsNum = Number(odds.trim() || NaN);
-  const breakEvenPct = Number.isFinite(oddsNum)
+  const hasProp = Number.isFinite(propNum);
+  const hasOdds = Number.isFinite(oddsNum);
+  const canPrice = hasProp && hasOdds;
+
+  // Break-even & win payout (we still compute; not required to blank)
+  const breakEvenPct = hasOdds
     ? (oddsNum > 0 ? 100 / (oddsNum + 100) : Math.abs(oddsNum) / (Math.abs(oddsNum) + 100)) * 100
     : 0;
-  const winPayout = Number.isFinite(oddsNum) ? americanToWinPayout(oddsNum) : 0;
-  const ev100 = (hitRate / 100) * winPayout - (1 - hitRate / 100) * 100;
-  const confidence = confidenceFromEV(ev100, games.length);
+  const winPayout = hasOdds ? americanToWinPayout(oddsNum) : 0;
+
+  // EV per $100 — only meaningful when BOTH prop line and odds exist
+  const ev100Raw = (hitRate / 100) * winPayout - (1 - hitRate / 100) * 100;
+  const ev100 = canPrice ? ev100Raw : 0;
+  const confidence = canPrice ? confidenceFromEV(ev100, games.length) : null;
 
   /* --------------------------- UI components -------------------------- */
 
@@ -347,9 +358,21 @@ export default function Home() {
   ].filter(Boolean).join(' • ');
 
   const viewParams = {
-    playerText, playerId: resolvePlayerId(), stat, season, propLine, odds,
-    lastX, homeAway, opponent, minMinutes, postseason, includeZero,
-    startDate, endDate, recency
+    playerText,
+    playerId: resolvedPlayerId(),
+    stat,
+    season,
+    propLine,
+    odds,
+    lastX,
+    homeAway,
+    opponent,
+    minMinutes,
+    postseason,
+    includeZero,
+    startDate,
+    endDate,
+    recency
   };
 
   return (
@@ -373,7 +396,7 @@ export default function Home() {
               <button
                 onClick={() => {
                   setPlayerText('Jayson Tatum');
-                  setSeason(season); // leave as computed default
+                  setSelected({ id: 434, name: 'Jayson Tatum' });
                   setStat('Points');
                   setPropLine('22.5');
                   setOdds('-110');
@@ -416,7 +439,7 @@ export default function Home() {
                   <button
                     key={p.id}
                     type="button"
-                    onClick={() => { setPlayerText(p.name); setSelectedPlayerId(p.id); setPlayers([]); }}
+                    onClick={() => { setPlayerText(p.name); setSelected({ id: p.id, name: p.name }); setPlayers([]); }}
                     className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800"
                   >
                     <span>{p.name}</span>
@@ -476,7 +499,7 @@ export default function Home() {
         <div>
           <label className="mb-1 block text-sm text-neutral-600 dark:text-neutral-300">Odds (American)</label>
           <input
-            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:placeholder-neutral-500"
+            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
             value={odds}
             onChange={(e) => setOdds(e.target.value)}
             placeholder="-110"
@@ -574,9 +597,9 @@ export default function Home() {
       <div className="mb-4 flex items-center gap-3">
         <button
           onClick={fetchGameLogs}
-          disabled={busy || !resolvePlayerId()}
+          disabled={busy || !resolvedPlayerId()}
           className="rounded-md bg-amber-500 px-4 py-2 font-medium text-white hover:bg-amber-600 disabled:opacity-60"
-          title={!resolvePlayerId() ? 'Type a player and select from the list' : 'Fetch game logs'}
+          title={!resolvedPlayerId() ? 'Type a player and select from the list' : 'Fetch game logs'}
         >
           {busy ? 'Fetching…' : 'Fetch Game Logs'}
         </button>
@@ -598,7 +621,7 @@ export default function Home() {
         <KpiCard title="SEASON AVG" value={kpis.seasonAvg} line={propLine} blurb={KPI_BLURBS['SEASON AVG']} />
         <KpiCard title="HOME AVG" value={kpis.homeAvg} line={propLine} blurb={KPI_BLURBS['HOME AVG']} />
         <KpiCard title="AWAY AVG" value={kpis.awayAvg} line={propLine} blurb={KPI_BLURBS['AWAY AVG']} />
-        <ConfidenceCard label={confidence.label} color={confidence.color} text={confidence.text} />
+        <ConfidenceCard ev100={ev100} sample={games.length} enabled={canPrice} />
 
         <KpiCard title="WEIGHTED AVG" value={kpis.weighted} line={propLine} blurb={KPI_BLURBS['WEIGHTED AVG']} />
         <KpiCard title="LAST 3 AVG" value={kpis.last3} line={propLine} blurb={KPI_BLURBS['LAST 3 AVG']} />
@@ -614,7 +637,7 @@ export default function Home() {
         <KpiCard title="HIT RATE" value={hitRate} pct line={propLine} blurb={KPI_BLURBS['HIT RATE']} />
         <KpiCard title="BREAK-EVEN %" value={breakEvenPct} pct blurb={KPI_BLURBS['BREAK-EVEN %']} />
         <KpiCard title="PROFIT IF WIN ($100)" value={americanToWinPayout(Number(odds || NaN))} money blurb={KPI_BLURBS['PROFIT IF WIN ($100)']} />
-        <KpiCard title="EV / $100" value={ev100} money blurb={KPI_BLURBS['EV / $100']} highlightEV />
+        <KpiCard title="EV / $100" value={ev100} money blurb={KPI_BLURBS['EV / $100']} highlightEV disabled={!canPrice} />
       </div>
 
       {/* Table */}
@@ -686,6 +709,7 @@ function KpiCard({
   highlightEV = false,
   pureCount = false,
   foot,
+  disabled = false,
 }: {
   title: string;
   value: number;
@@ -696,57 +720,69 @@ function KpiCard({
   highlightEV?: boolean;
   pureCount?: boolean;
   foot?: string;
+  disabled?: boolean;
 }) {
   const prop = line ? parseFloat(line) : undefined;
-  const display = pureCount
-    ? String(value)
-    : pct
-      ? `${value.toFixed(1)}%`
-      : money
-        ? (value >= 0 ? `$${value.toFixed(2)}` : `-$${Math.abs(value).toFixed(2)}`)
-        : value.toFixed(2);
 
-  const diff = Number.isFinite(prop) && !pureCount ? (value - (prop as number)) : null;
+  const display = disabled
+    ? '—'
+    : pureCount
+      ? String(value)
+      : pct
+        ? `${value.toFixed(1)}%`
+        : money
+          ? (value >= 0 ? `$${value.toFixed(2)}` : `-$${Math.abs(value).toFixed(2)}`)
+          : value.toFixed(2);
 
-  const barStyle = highlightEV
-    ? value >= 0 ? 'bg-emerald-500' : 'bg-rose-500'
-    : 'bg-amber-500';
+  const showDiff = Number.isFinite(prop) && !pureCount && !disabled;
+  const diff = showDiff ? (value - (prop as number)) : null;
+
+  const barStyle = disabled
+    ? 'bg-neutral-300 dark:bg-neutral-700'
+    : highlightEV
+      ? value >= 0 ? 'bg-emerald-500' : 'bg-rose-500'
+      : 'bg-amber-500';
 
   return (
     <div className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-900">
       <div className="text-xs tracking-wide text-neutral-500 dark:text-neutral-400">{title}</div>
       <div className="mt-2 text-3xl font-semibold tabular-nums">{display}</div>
 
-      {diff !== null && (
+      {showDiff && diff !== null && (
         <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
           {(diff >= 0 ? '+' : '') + (diff).toFixed(2)} vs {prop}
         </div>
       )}
 
       {blurb && (
-        <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{blurb}</div>
+        <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+          {disabled ? 'Add Prop Line + Odds to see this.' : blurb}
+        </div>
       )}
 
       <div className="mt-3 h-1 w-full rounded-full bg-neutral-200 dark:bg-neutral-700">
         <div className={`h-1 w-2/3 rounded-full ${barStyle}`} />
       </div>
 
-      {foot && (
+      {foot && !disabled && (
         <div className="mt-2 whitespace-pre-line text-xs text-neutral-500 dark:text-neutral-400">{foot}</div>
       )}
     </div>
   );
 }
 
-function ConfidenceCard({ label, color, text }: { label: string; color: string; text: string }) {
+function ConfidenceCard({ ev100, sample, enabled }: { ev100: number; sample: number; enabled: boolean }) {
+  const neutral = { label: '—', color: 'bg-neutral-300', text: 'text-neutral-800 dark:text-neutral-100' };
+  const c = enabled ? confidenceFromEV(ev100, sample) : neutral;
+
   return (
     <div className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-900">
       <div className="text-xs tracking-wide text-neutral-500 dark:text-neutral-400">CONFIDENCE</div>
-      <div className={`mt-2 inline-flex items-center gap-2 rounded-full px-3 py-1 ${color} ${text}`}>
-        <span className="text-sm font-semibold">{label}</span>
+      <div className={`mt-2 inline-flex items-center gap-2 rounded-full px-3 py-1 ${c.color} ${c.text}`}>
+        <span className="text-sm font-semibold">{c.label}</span>
       </div>
       <div className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
-        Based on EV per $100 and sample size. Larger samples tighten confidence.
+        {enabled ? 'Based on EV per $100 and sample size.' : 'Add Prop Line + Odds to see this.'}
       </div>
     </div>
   );
