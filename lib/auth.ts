@@ -1,10 +1,18 @@
-import type { DefaultSession, NextAuthOptions } from "next-auth";
-import GoogleProvider from "next-auth/providers/google";
+// lib/auth.ts (v5 shim)
+// Keep any session type augmentation you want, but DO NOT import NextAuthOptions.
+
+import type { DefaultSession } from "next-auth";
+
+// Optional: augment the Session shape your app uses
 declare module "next-auth" {
-  interface Session extends DefaultSession { user: DefaultSession["user"] & { id: string } }
+  interface Session {
+    user: DefaultSession["user"] & {
+      id?: string;
+      plan?: string;
+      proUntil?: string | null;
+    };
+  }
 }
-export const authOptions: NextAuthOptions = {
-  session: { strategy: "jwt" },
-  providers: [ GoogleProvider({ clientId: process.env.GOOGLE_CLIENT_ID || "unset", clientSecret: process.env.GOOGLE_CLIENT_SECRET || "unset" }) ],
-  callbacks: { async session({ session, token }) { if (session.user) (session.user as any).id = token.sub!; return session; } },
-};
+
+// Re-export the v5 helpers from the root auth.ts
+export { handlers, auth, signIn, signOut } from "@/auth";
