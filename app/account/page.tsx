@@ -1,11 +1,12 @@
 "use client";
+
 export const dynamic = "force-dynamic";
 
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import VerifyAfterCheckout from "./VerifyAfterCheckout";
-import UpgradeGate from "./UpgradeGate";
 import { proFeaturesEnabled, type Plan } from "@/lib/flags";
+import { signIn, useSession } from "next-auth/react";
 
 type PlanResp = {
   ok: boolean;
@@ -15,25 +16,16 @@ type PlanResp = {
   email?: string | null;
 };
 
-function Pill({
-  children,
-  tone = "neutral",
-}: {
-  children: React.ReactNode;
-  tone?: "neutral" | "success";
-}) {
+function Pill({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "neutral" | "success" }) {
   const tones: Record<string, string> = {
     neutral: "bg-neutral-900/40 border border-neutral-800 text-neutral-200",
     success: "bg-green-900/20 border border-green-600/50 text-green-200",
   };
-  return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${tones[tone]}`}>
-      {children}
-    </span>
-  );
+  return <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${tones[tone]}`}>{children}</span>;
 }
 
 export default function AccountPage() {
+  const { status } = useSession();
   const [loading, setLoading] = useState(true);
   const [plan, setPlan] = useState<Plan>("FREE");
   const [proUntil, setProUntil] = useState<Date | null>(null);
@@ -53,7 +45,6 @@ export default function AccountPage() {
       setProUntil(data?.proUntil ? new Date(data.proUntil) : null);
       setUserName(data?.name ?? null);
       setUserEmail(data?.email ?? null);
-      setErrorMsg("");
     } catch (e: any) {
       setErrorMsg(e?.message || "Could not load plan info.");
       setPlan("FREE");
@@ -71,31 +62,20 @@ export default function AccountPage() {
   }, []);
 
   const badge =
-    plan === "FREE" ? (
-      <Pill>Free</Pill>
-    ) : plan === "SEASON" ? (
-      <Pill tone="success">Pro — Season</Pill>
-    ) : (
-      <Pill tone="success">Pro — Monthly</Pill>
-    );
+    plan === "FREE" ? <Pill>Free</Pill> :
+    plan === "SEASON" ? <Pill tone="success">Pro — Season</Pill> :
+    <Pill tone="success">Pro — Monthly</Pill>;
 
   async function startCheckout() {
+    if (status !== "authenticated") {
+      // auto-route to sign-in if not logged in
+      await signIn("google", { callbackUrl: "/account?upgrade=1" });
+      return;
+    }
     try {
       setCtaLoading(true);
       setErrorMsg("");
-
-      const res = await fetch(`/api/billing/checkout`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ mode: "season" }),
-      });
-
-      if (res.status === 401) {
-        // UpgradeGate will redirect; show a quick inline hint just in case
-        setErrorMsg("Sign in required to upgrade.");
-        return;
-      }
-
+      const res = await fetch(`/api/billing/checkout?plan=season`, { headers: { Accept: "application/json" } });
       const txt = await res.text();
       const data = JSON.parse(txt);
       if (!res.ok || !data?.url) throw new Error(data?.error || "Upgrade failed to initialize.");
@@ -111,17 +91,7 @@ export default function AccountPage() {
     try {
       setPortalLoading(true);
       setErrorMsg("");
-
-      const res = await fetch(`/api/billing/portal`, {
-        method: "POST",
-        headers: { Accept: "application/json" },
-      });
-
-      if (res.status === 401) {
-        setErrorMsg("Sign in required to manage billing.");
-        return;
-      }
-
+      const res = await fetch(`/api/billing/portal`, { headers: { Accept: "application/json" } });
       const txt = await res.text();
       const data = JSON.parse(txt);
       if (!res.ok || !data?.url) throw new Error(data?.error || "Could not open billing portal.");
@@ -137,14 +107,13 @@ export default function AccountPage() {
 
   return (
     <div className="space-y-6">
-      {/* Wrap all search-param readers in Suspense */}
+      {/* wrap here to satisfy Next.js CSR bailout rule */}
       <Suspense fallback={null}>
-        <UpgradeGate isLoading={loading} userEmail={userEmail} />
         <VerifyAfterCheckout />
       </Suspense>
 
       <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 p-5">
-        <h1 className="mb-4 text-2xl font-semibold">Account</h1>
+        <h1 className="text-2xl font-semibold mb-4">Account</h1>
 
         <div className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-900/60 p-4">
           <div className="flex items-center gap-3">
@@ -160,17 +129,14 @@ export default function AccountPage() {
         </div>
 
         <div className="mt-6 rounded-xl border border-neutral-800 bg-neutral-950/40">
-          <div className="border-b border-neutral-800 p-4">
+          <div className="p-4 border-b border-neutral-800">
             <div className="flex items-center justify-between">
               <div className="text-lg font-semibold">Plan</div>
               <div className="flex gap-2">
                 <Link href="/" className="rounded-lg border border-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-900">
                   ← Back to Research
                 </Link>
-                <button
-                  onClick={refreshPlan}
-                  className="rounded-lg border border-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-900"
-                >
+                <button onClick={refreshPlan} className="rounded-lg border border-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-900">
                   {loading ? "Refreshing…" : "Refresh"}
                 </button>
                 {plan === "MONTHLY" && (
@@ -186,11 +152,11 @@ export default function AccountPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 p-4 md:grid-cols-3">
+          <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Current */}
             <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
-              <div className="mb-1 text-sm text-neutral-400">Current Plan</div>
-              <div className="mb-1 text-lg font-semibold">
+              <div className="text-sm text-neutral-400 mb-1">Current Plan</div>
+              <div className="text-lg font-semibold mb-1">
                 {plan === "FREE" ? "Free" : plan === "SEASON" ? "Pro — Season" : "Pro — Monthly"}
               </div>
               {plan !== "FREE" && proUntil ? (
@@ -210,7 +176,7 @@ export default function AccountPage() {
 
             {/* Value bullets */}
             <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
-              <div className="mb-2 text-sm text-neutral-400">Pro features</div>
+              <div className="text-sm text-neutral-400 mb-2">Pro features</div>
               <ul className="space-y-1.5 text-sm">
                 <li>• Full season logs (no cap)</li>
                 <li>• Advanced filters: <span className="font-medium">Min Minutes, Opponent, Rest</span></li>
@@ -228,10 +194,10 @@ export default function AccountPage() {
             </div>
 
             {/* Upgrade CTA */}
-            <div className="flex flex-col justify-between rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
+            <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4 flex flex-col justify-between">
               <div>
-                <div className="mb-1 text-sm text-neutral-400">Upgrade</div>
-                <div className="mb-2 text-lg font-semibold">Pro — Season Pass</div>
+                <div className="text-sm text-neutral-400 mb-1">Upgrade</div>
+                <div className="text-lg font-semibold mb-2">Pro — Season Pass</div>
                 <div className="text-xs text-neutral-400">
                   One-time purchase for the season. Billing portal appears if you switch to Monthly later.
                 </div>

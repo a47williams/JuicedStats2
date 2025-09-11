@@ -1,5 +1,5 @@
 "use client";
-import { Suspense } from "react";
+
 import { useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 
@@ -80,6 +80,3 @@ export default function VerifyAfterCheckout() {
     </div>
   );
 }
-<Suspense fallback={null}>
-  <VerifyAfterCheckout />
-</Suspense>
