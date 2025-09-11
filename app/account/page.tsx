@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
 import VerifyAfterCheckout from "./VerifyAfterCheckout";
+import UpgradeGate from "./UpgradeGate";
 import { proFeaturesEnabled, type Plan } from "@/lib/flags";
 
 type PlanResp = {
@@ -26,18 +26,13 @@ function Pill({
     success: "bg-green-900/20 border border-green-600/50 text-green-200",
   };
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${tones[tone]}`}
-    >
+    <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${tones[tone]}`}>
       {children}
     </span>
   );
 }
 
 export default function AccountPage() {
-  const router = useRouter();
-  const sp = useSearchParams();
-
   const [loading, setLoading] = useState(true);
   const [plan, setPlan] = useState<Plan>("FREE");
   const [proUntil, setProUntil] = useState<Date | null>(null);
@@ -74,15 +69,6 @@ export default function AccountPage() {
     return () => window.removeEventListener("juicedstats:plan-updated", onUpd);
   }, []);
 
-  // If a logged-out user hits /account?upgrade=1, send them to Sign In automatically.
-  useEffect(() => {
-    const wantsUpgrade = sp.get("upgrade") === "1";
-    if (!loading && wantsUpgrade && !userEmail) {
-      const cb = "/account?upgrade=1";
-      router.push(`/api/auth/signin?callbackUrl=${encodeURIComponent(cb)}`);
-    }
-  }, [sp, loading, userEmail, router]);
-
   const badge =
     plan === "FREE" ? (
       <Pill>Free</Pill>
@@ -103,10 +89,9 @@ export default function AccountPage() {
         body: JSON.stringify({ mode: "season" }),
       });
 
-      // Not signed in? Bounce to sign in and come back here.
       if (res.status === 401) {
-        const cb = "/account?upgrade=1";
-        router.push(`/api/auth/signin?callbackUrl=${encodeURIComponent(cb)}`);
+        // UpgradeGate will redirect; show a quick inline hint just in case
+        setErrorMsg("Sign in required to upgrade.");
         return;
       }
 
@@ -132,15 +117,13 @@ export default function AccountPage() {
       });
 
       if (res.status === 401) {
-        const cb = "/account";
-        router.push(`/api/auth/signin?callbackUrl=${encodeURIComponent(cb)}`);
+        setErrorMsg("Sign in required to manage billing.");
         return;
       }
 
       const txt = await res.text();
       const data = JSON.parse(txt);
-      if (!res.ok || !data?.url)
-        throw new Error(data?.error || "Could not open billing portal.");
+      if (!res.ok || !data?.url) throw new Error(data?.error || "Could not open billing portal.");
       window.location.href = data.url as string;
     } catch (e: any) {
       setErrorMsg(e?.message || "Could not open billing portal.");
@@ -153,7 +136,11 @@ export default function AccountPage() {
 
   return (
     <div className="space-y-6">
-      <VerifyAfterCheckout />
+      {/* Wrap all search-param readers in Suspense */}
+      <Suspense fallback={null}>
+        <UpgradeGate isLoading={loading} userEmail={userEmail} />
+        <VerifyAfterCheckout />
+      </Suspense>
 
       <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 p-5">
         <h1 className="mb-4 text-2xl font-semibold">Account</h1>
@@ -176,10 +163,7 @@ export default function AccountPage() {
             <div className="flex items-center justify-between">
               <div className="text-lg font-semibold">Plan</div>
               <div className="flex gap-2">
-                <Link
-                  href="/"
-                  className="rounded-lg border border-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-900"
-                >
+                <Link href="/" className="rounded-lg border border-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-900">
                   ← Back to Research
                 </Link>
                 <button
@@ -228,27 +212,13 @@ export default function AccountPage() {
               <div className="mb-2 text-sm text-neutral-400">Pro features</div>
               <ul className="space-y-1.5 text-sm">
                 <li>• Full season logs (no cap)</li>
-                <li>
-                  • Advanced filters: <span className="font-medium">Min Minutes, Opponent, Rest</span>
-                </li>
-                <li>
-                  • <span className="font-medium">EV / $100</span> (expected profit per $100 bet)
-                </li>
-                <li>
-                  • <span className="font-medium">Confidence</span> (probability your edge is +EV)
-                </li>
-                <li>
-                  • <span className="font-medium">Fair Line</span> model vs book line
-                </li>
-                <li>
-                  • <span className="font-medium">Edge Finder</span> highlights (L10, home/away, matchup)
-                </li>
-                <li>
-                  • <span className="font-medium">CSV Export</span> for logs
-                </li>
-                <li>
-                  • <span className="font-medium">Save Views</span> for quick recall
-                </li>
+                <li>• Advanced filters: <span className="font-medium">Min Minutes, Opponent, Rest</span></li>
+                <li>• <span className="font-medium">EV / $100</span> (expected profit per $100 bet)</li>
+                <li>• <span className="font-medium">Confidence</span> (probability your edge is +EV)</li>
+                <li>• <span className="font-medium">Fair Line</span> model vs book line</li>
+                <li>• <span className="font-medium">Edge Finder</span> highlights (L10, home/away, matchup)</li>
+                <li>• <span className="font-medium">CSV Export</span> for logs</li>
+                <li>• <span className="font-medium">Save Views</span> for quick recall</li>
                 <li>• Higher usage limits during busy slates</li>
               </ul>
               <div className="mt-3 text-xs text-neutral-400">
@@ -275,10 +245,7 @@ export default function AccountPage() {
                     {ctaLoading ? "Starting checkout…" : "Upgrade to Pro — Season"}
                   </button>
                 ) : (
-                  <button
-                    disabled
-                    className="w-full rounded-lg border border-neutral-800 px-4 py-2 text-sm text-neutral-400"
-                  >
+                  <button disabled className="w-full rounded-lg border border-neutral-800 px-4 py-2 text-sm text-neutral-400">
                     You’re already Pro
                   </button>
                 )}
