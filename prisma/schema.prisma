@@ -4,7 +4,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite" // in prod you can set DATABASE_URL to Postgres; Prisma will use that
+  provider = "sqlite" // For prod Postgres later, just change this and set DATABASE_URL
   url      = env("DATABASE_URL")
 }
 
@@ -29,18 +29,18 @@ model User {
 
 model Account {
   // next-auth adapter model
-  userId                 String
-  type                   String
-  provider               String
-  providerAccountId      String
-  refresh_token          String?  @db.Text
-  access_token           String?  @db.Text
-  expires_at             Int?
-  token_type             String?
-  scope                  String?
-  id_token               String?  @db.Text
-  session_state          String?
-  refresh_token_expires_in Int?
+  userId                    String
+  type                      String
+  provider                  String
+  providerAccountId         String
+  refresh_token             String?    // <- removed @db.Text for SQLite
+  access_token              String?    // <- removed @db.Text
+  expires_at                Int?
+  token_type                String?
+  scope                     String?
+  id_token                  String?    // <- removed @db.Text
+  session_state             String?
+  refresh_token_expires_in  Int?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
