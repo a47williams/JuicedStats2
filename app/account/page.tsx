@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import Link from "next/link";
 import VerifyAfterCheckout from "./VerifyAfterCheckout";
 import { proFeaturesEnabled, type Plan } from "@/lib/flags";
@@ -95,7 +95,10 @@ export default function AccountPage() {
 
   return (
     <div className="space-y-6">
-      <VerifyAfterCheckout />
+      {/* ✅ Wrap anything that uses useSearchParams in Suspense */}
+      <Suspense fallback={null}>
+        <VerifyAfterCheckout />
+      </Suspense>
 
       <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 p-5">
         <h1 className="text-2xl font-semibold mb-4">Account</h1>
