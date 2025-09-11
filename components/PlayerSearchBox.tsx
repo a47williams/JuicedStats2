@@ -39,7 +39,7 @@ export default function PlayerSearchBox({
   const boxRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // NEW: remember the last selected player's name to suppress "No matches"
+  // remember the last selected player's name to suppress "No matches" after a pick
   const lastPickedNameRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -133,7 +133,7 @@ export default function PlayerSearchBox({
     }
   }
 
-  // Suppress "No matches" if the input equals the last picked name
+  // Suppress "No matches" if input equals the last picked name
   const suppressNoMatches =
     lastPickedNameRef.current != null &&
     query.trim() === lastPickedNameRef.current;
@@ -170,7 +170,13 @@ export default function PlayerSearchBox({
         onKeyDown={onKeyDown}
         placeholder={placeholder}
         disabled={disabled}
-        className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 outline-none ring-0 focus:border-neutral-700"
+        className="
+          w-full rounded-lg border px-3 py-2 outline-none ring-0
+          bg-white text-neutral-900 placeholder:text-neutral-400 border-neutral-300
+          focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/20
+          dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500 dark:border-neutral-800
+          dark:focus:border-emerald-500/60 dark:focus:ring-emerald-500/25
+        "
         autoComplete="off"
         spellCheck={false}
         aria-autocomplete="list"
@@ -182,12 +188,16 @@ export default function PlayerSearchBox({
         <div
           id="player-search-listbox"
           role="listbox"
-          className="absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-lg border border-neutral-800 bg-neutral-950 shadow-lg"
+          className="
+            absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-lg border shadow-lg
+            bg-white text-neutral-900 border-neutral-200
+            dark:bg-neutral-900 dark:text-neutral-100 dark:border-neutral-800
+          "
         >
           {loading ? (
-            <div className="px-3 py-2 text-sm text-neutral-400">Searching…</div>
+            <div className="px-3 py-2 text-sm text-neutral-500 dark:text-neutral-400">Searching…</div>
           ) : error ? (
-            <div className="px-3 py-2 text-sm text-red-400">Error: {error}</div>
+            <div className="px-3 py-2 text-sm text-red-600 dark:text-red-400">Error: {error}</div>
           ) : showNoMatches ? (
             <div className="px-3 py-2 text-sm text-neutral-500">No matches</div>
           ) : (
@@ -202,7 +212,9 @@ export default function PlayerSearchBox({
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => handleSelect(p)}
                   className={`cursor-pointer px-3 py-2 text-sm ${
-                    isActive ? "bg-neutral-800 text-white" : "text-neutral-200 hover:bg-neutral-900"
+                    isActive
+                      ? "bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-white"
+                      : "hover:bg-neutral-50 dark:hover:bg-neutral-800/60"
                   }`}
                 >
                   {display(p)}

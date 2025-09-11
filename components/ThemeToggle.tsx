@@ -1,25 +1,40 @@
 "use client";
 
-import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
+import { useTheme } from "next-themes";
 
 export default function ThemeToggle() {
-  const { resolvedTheme, setTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
-
-  // Avoid SSR/CSR mismatch: only show the label after mount
   useEffect(() => setMounted(true), []);
 
-  const isDark = resolvedTheme === "dark";
+  if (!mounted) {
+    // Avoid hydration mismatch
+    return (
+      <button
+        aria-label="Toggle theme"
+        className="rounded-md border px-3 py-1.5 text-sm border-neutral-800 bg-neutral-900/40"
+        disabled
+      >
+        …
+      </button>
+    );
+  }
+
+  const isDark = theme !== "light";
+  const next = isDark ? "light" : "dark";
 
   return (
     <button
-      onClick={() => setTheme(isDark ? "light" : "dark")}
-      className="rounded-md border border-neutral-700 px-3 py-1 text-sm hover:bg-neutral-800"
+      onClick={() => setTheme(next)}
       aria-label="Toggle theme"
-      suppressHydrationWarning
+      className="
+        rounded-md px-3 py-1.5 text-sm font-medium
+        border bg-white/70 text-neutral-900 hover:bg-white
+        dark:border-neutral-800 dark:bg-neutral-900/60 dark:text-neutral-200 dark:hover:bg-neutral-900
+      "
     >
-      {mounted ? (isDark ? "Light" : "Dark") : "…"}
+      {isDark ? "Light" : "Dark"}
     </button>
   );
 }

@@ -13,13 +13,13 @@ const TEAM_ID_TO_ABBR: Record<number, string> = {
   30: "WAS",
 };
 
-// American odds → break-even probability (implied)
+// American odds → break-even probability
 function breakevenProb(american: number): number {
   if (!isFinite(american) || american === 0) return NaN;
   return american > 0 ? 100 / (american + 100) : Math.abs(american) / (Math.abs(american) + 100);
 }
 
-// profit (not payout) for a $100 stake at given American odds
+// profit (not payout) for a $100 stake
 function profitPer100(american: number): number {
   if (!isFinite(american) || american === 0) return 0;
   return american > 0 ? american : 100 * (100 / Math.abs(american));
@@ -28,41 +28,32 @@ function profitPer100(american: number): number {
 function clamp01(x: number) {
   return Math.max(0, Math.min(1, x));
 }
-
 function fmtPct(x: number | null | undefined, digits = 0) {
   if (x == null || !isFinite(x)) return "—";
   return `${(100 * x).toFixed(digits)}%`;
 }
-
 function mean(nums: number[]) {
   if (!nums.length) return 0;
   return nums.reduce((a, b) => a + b, 0) / nums.length;
 }
-
 function median(nums: number[]) {
   if (!nums.length) return 0;
   const s = [...nums].sort((a, b) => a - b);
   const mid = Math.floor(s.length / 2);
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
-
 function wilsonUpperLower(pHat: number, n: number, z = 1.96) {
-  // Wilson score interval
   if (n === 0) return { lo: 0, hi: 0 };
   const denom = 1 + (z ** 2) / n;
   const center = (pHat + (z ** 2) / (2 * n)) / denom;
   const margin = (z * Math.sqrt((pHat * (1 - pHat)) / n + (z ** 2) / (4 * n ** 2))) / denom;
   return { lo: Math.max(0, center - margin), hi: Math.min(1, center + margin) };
 }
-
-// Normal CDF approximation (Abramowitz & Stegun 26.2.17)
+// Normal CDF approx
 function normalCDF(x: number) {
   const t = 1 / (1 + 0.2316419 * Math.abs(x));
-  const d = 0.3989422804014327 * Math.exp(-(x * x) / 2); // 1/√(2π) * e^(−x²/2)
-  const poly =
-    t *
-    (0.319381530 +
-      t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  const d = 0.3989422804014327 * Math.exp(-(x * x) / 2);
+  const poly = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
   const p = 1 - d * poly;
   return x >= 0 ? p : 1 - p;
 }
@@ -233,7 +224,7 @@ export default function HomePage() {
   const awayAvg = mean(cleanLogs.filter(r => r.ha === "A").map(r => computeStat(r, statKey)));
   const weightedAvg = useMemo(() => {
     if (!statSeries.length) return 0;
-    // recency weight: newest gets ~1.5 → linearly down to 0.5
+    // recency weight: newest gets ~1.5 → down to 0.5
     const n = statSeries.length;
     const weights = statSeries.map((_, i) => 0.5 + (1.0 * (n - i)) / n); // sorted desc
     const totalW = weights.reduce((a, b) => a + b, 0);
@@ -246,7 +237,7 @@ export default function HomePage() {
   const maxVal = useMemo(() => (statSeries.length ? Math.max(...statSeries) : 0), [statSeries]);
   const medVal = useMemo(() => median(statSeries), [statSeries]);
 
-  // EV & confidence (only when both inputs given)
+  // EV & confidence
   const numericLine = Number(propLine);
   const numericOdds = Number(odds);
   const hasEdgeInputs = isFinite(numericLine) && isFinite(numericOdds) && propLine.trim() !== "" && odds.trim() !== "";
@@ -279,12 +270,12 @@ export default function HomePage() {
 
   const confColor =
     !isFinite(confidencePct)
-      ? "border-neutral-800"
+      ? "border-neutral-200 dark:border-neutral-800"
       : confidencePct >= 0.6
-      ? "border-emerald-700 bg-emerald-900/20"
+      ? "border-emerald-700 bg-emerald-50 text-emerald-900 dark:bg-emerald-900/20 dark:text-emerald-200"
       : confidencePct >= 0.4
-      ? "border-amber-700 bg-amber-900/20"
-      : "border-red-800 bg-red-900/20";
+      ? "border-amber-700 bg-amber-50 text-amber-900 dark:bg-amber-900/20 dark:text-amber-200"
+      : "border-red-800 bg-red-50 text-red-900 dark:bg-red-900/20 dark:text-red-200";
 
   // CSV export
   const onExportCSV = () => {
@@ -313,24 +304,25 @@ export default function HomePage() {
   return (
     <div className="mx-auto max-w-6xl px-4 pb-24">
       <h1 className="mt-8 text-2xl font-semibold">NBA Prop Research</h1>
-      <p className="mt-1 text-sm text-neutral-400">
+      <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
         Search a player → hit “See Stats” → enter prop line & odds to compute EV & confidence.
       </p>
 
       {/* FORM */}
-      <div className="mt-6 rounded-xl border border-neutral-800 p-4">
+      <div className="mt-6 rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
           {/* Player */}
           <div>
-            <label className="mb-1 block text-xs text-neutral-400">Player</label>
+            <label className="mb-1 block text-xs text-neutral-500 dark:text-neutral-400">Player</label>
             <PlayerSearchBox value={playerQuery} onChange={setPlayerQuery} onSelect={onPlayerSelect} />
           </div>
 
           {/* Season */}
           <div>
-            <label className="mb-1 block text-xs text-neutral-400">Season</label>
+            <label className="mb-1 block text-xs text-neutral-500 dark:text-neutral-400">Season</label>
             <select
-              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900
+                         dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100"
               value={season}
               onChange={(e) => setSeason(e.target.value)}
             >
@@ -342,9 +334,10 @@ export default function HomePage() {
 
           {/* Stat */}
           <div>
-            <label className="mb-1 block text-xs text-neutral-400">Stat</label>
+            <label className="mb-1 block text-xs text-neutral-500 dark:text-neutral-400">Stat</label>
             <select
-              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900
+                         dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100"
               value={statKey}
               onChange={(e) => setStatKey(e.target.value as StatKey)}
             >
@@ -356,11 +349,13 @@ export default function HomePage() {
 
           {/* Last X */}
           <div>
-            <label className="mb-1 block text-xs text-neutral-400">Last X Games (blank = all)</label>
+            <label className="mb-1 block text-xs text-neutral-500 dark:text-neutral-400">Last X Games (blank = all)</label>
             <input
               inputMode="numeric"
               placeholder="All"
-              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900
+                         placeholder:text-neutral-400
+                         dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500"
               value={lastX}
               onChange={(e) => setLastX(e.target.value.replace(/[^0-9]/g, ""))}
             />
@@ -368,11 +363,13 @@ export default function HomePage() {
 
           {/* Min Minutes */}
           <div>
-            <label className="mb-1 block text-xs text-neutral-400">Min Minutes</label>
+            <label className="mb-1 block text-xs text-neutral-500 dark:text-neutral-400">Min Minutes</label>
             <input
               inputMode="numeric"
               placeholder="e.g., 24"
-              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900
+                         placeholder:text-neutral-400
+                         dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500"
               value={minMinutes}
               onChange={(e) => setMinMinutes(e.target.value.replace(/[^0-9]/g, ""))}
             />
@@ -380,9 +377,10 @@ export default function HomePage() {
 
           {/* H/A */}
           <div>
-            <label className="mb-1 block text-xs text-neutral-400">Home/Away</label>
+            <label className="mb-1 block text-xs text-neutral-500 dark:text-neutral-400">Home/Away</label>
             <select
-              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900
+                         dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100"
               value={homeAway}
               onChange={(e) => setHomeAway(e.target.value as "" | "H" | "A")}
             >
@@ -394,10 +392,12 @@ export default function HomePage() {
 
           {/* Opp */}
           <div>
-            <label className="mb-1 block text-xs text-neutral-400">Opponent (abbr)</label>
+            <label className="mb-1 block text-xs text-neutral-500 dark:text-neutral-400">Opponent (abbr)</label>
             <input
               placeholder="e.g., BOS"
-              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 uppercase"
+              className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900 uppercase
+                         placeholder:text-neutral-400
+                         dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500"
               value={opp}
               onChange={(e) => setOpp(e.target.value.toUpperCase().slice(0, 3))}
             />
@@ -405,9 +405,10 @@ export default function HomePage() {
 
           {/* Rest */}
           <div>
-            <label className="mb-1 block text-xs text-neutral-400">Rest</label>
+            <label className="mb-1 block text-xs text-neutral-500 dark:text-neutral-400">Rest</label>
             <select
-              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900
+                         dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100"
               value={rest}
               onChange={(e) => setRest(e.target.value as "" | "0" | "1" | "2" | "3+")}
             >
@@ -419,11 +420,13 @@ export default function HomePage() {
 
           {/* Prop line */}
           <div>
-            <label className="mb-1 block text-xs text-neutral-400">Prop Line</label>
+            <label className="mb-1 block text-xs text-neutral-500 dark:text-neutral-400">Prop Line</label>
             <input
               inputMode="decimal"
               placeholder="e.g., 26.5"
-              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900
+                         placeholder:text-neutral-400
+                         dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500"
               value={propLine}
               onChange={(e) => setPropLine(e.target.value.replace(/[^0-9.\-]/g, ""))}
             />
@@ -431,13 +434,17 @@ export default function HomePage() {
 
           {/* Odds */}
           <div>
-            <label className="mb-1 block text-xs text-neutral-400">Odds (American)</label>
+            <label className="mb-1 block text-xs text-neutral-500 dark:text-neutral-400">Odds (American)</label>
             <input
+              type="text"
               inputMode="numeric"
+              pattern="[-+]?[0-9]*"
               placeholder='e.g., "-115"'
-              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900
+                         placeholder:text-neutral-400
+                         dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500"
               value={odds}
-              onChange={(e) => setOdds(e.target.value.replace(/[^0-9\-]/g, ""))}
+              onChange={(e) => setOdds(e.target.value.replace(/[^0-9+\-]/g, ""))}
             />
           </div>
         </div>
@@ -446,14 +453,16 @@ export default function HomePage() {
           <button
             onClick={fetchLogs}
             disabled={!playerId || !seasonNum || loading}
-            className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-50"
+            className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800
+                       disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
           >
             {loading ? "Loading…" : "See Stats"}
           </button>
 
           <button
             onClick={reset}
-            className="rounded-lg border border-neutral-800 px-3 py-2 text-sm hover:bg-neutral-900"
+            className="rounded-lg border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-50
+                       dark:border-neutral-800 dark:hover:bg-neutral-900"
           >
             Reset
           </button>
@@ -476,12 +485,13 @@ export default function HomePage() {
 
           <button
             onClick={onExportCSV}
-            className="rounded-lg border border-neutral-800 px-3 py-2 text-sm hover:bg-neutral-900"
+            className="rounded-lg border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-50
+                       dark:border-neutral-800 dark:hover:bg-neutral-900"
           >
             Export CSV
           </button>
 
-          {error ? <span className="ml-2 text-sm text-red-400">{error}</span> : null}
+          {error ? <span className="ml-2 text-sm text-red-600 dark:text-red-400">{error}</span> : null}
         </div>
       </div>
 
@@ -507,22 +517,14 @@ export default function HomePage() {
           title="CONFIDENCE"
           value={isFinite(confidencePct) ? fmtPct(confidencePct, 0) : "—"}
           hint="Probability your estimated edge is actually +EV. Higher is better; based on hit-rate vs. break-even and sample size."
-          extraClass={
-            !isFinite(confidencePct)
-              ? "border-neutral-800"
-              : confidencePct >= 0.6
-              ? "border-emerald-700 bg-emerald-900/20"
-              : confidencePct >= 0.4
-              ? "border-amber-700 bg-amber-900/20"
-              : "border-red-800 bg-red-900/20"
-          }
+          extraClass={confColor}
         />
       </div>
 
       {/* TABLE */}
-      <div className="mt-8 overflow-x-auto rounded-xl border border-neutral-800">
+      <div className="mt-8 overflow-x-auto rounded-xl border border-neutral-200 dark:border-neutral-800">
         <table className="min-w-[900px] w-full text-sm">
-          <thead className="bg-neutral-950 text-neutral-400">
+          <thead className="bg-neutral-100 text-neutral-600 dark:bg-neutral-950 dark:text-neutral-400">
             <tr className="[&>th]:px-3 [&>th]:py-2 [&>th]:font-medium">
               <th className="text-left">Date</th>
               <th>Opp</th>
@@ -556,8 +558,8 @@ export default function HomePage() {
                   typeof r.opp === "number" ? (TEAM_ID_TO_ABBR[r.opp] || String(r.opp)) : "";
                 const pts = r.pts ?? 0, reb = r.reb ?? 0, ast = r.ast ?? 0, stl = r.stl ?? 0, blk = r.blk ?? 0, tov = r.to ?? 0;
                 return (
-                  <tr key={`${r.date}-${i}`} className="border-t border-neutral-900 hover:bg-neutral-950">
-                    <td className="px-3 py-2 text-neutral-300">{r.date}</td>
+                  <tr key={`${r.date}-${i}`} className="border-t border-neutral-200 hover:bg-neutral-50 dark:border-neutral-900 dark:hover:bg-neutral-950">
+                    <td className="px-3 py-2 text-neutral-800 dark:text-neutral-300">{r.date}</td>
                     <td className="px-3 py-2 text-center">{oppAbbr}</td>
                     <td className="px-3 py-2 text-center">{r.ha ?? ""}</td>
                     <td className="px-3 py-2 text-center">{r.min ?? 0}</td>
@@ -587,10 +589,10 @@ export default function HomePage() {
 // Simple KPI card
 function Kpi({ title, value, hint, extraClass }: { title: string; value: string; hint?: string; extraClass?: string }) {
   return (
-    <div className={`rounded-xl border ${extraClass || "border-neutral-800"} p-4`}>
-      <div className="text-xs uppercase tracking-wide text-neutral-400">{title}</div>
-      <div className="mt-1 text-3xl font-semibold">{value}</div>
-      {hint ? <div className="mt-1 text-xs text-neutral-500">{hint}</div> : null}
+    <div className={`rounded-xl border p-4 ${extraClass || "border-neutral-200 dark:border-neutral-800"}`}>
+      <div className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">{title}</div>
+      <div className="mt-1 text-3xl font-semibold text-neutral-900 dark:text-neutral-100">{value}</div>
+      {hint ? <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-500">{hint}</div> : null}
     </div>
   );
 }

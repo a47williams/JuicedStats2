@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import VerifyAfterCheckout from "./VerifyAfterCheckout";
 import { proFeaturesEnabled, type Plan } from "@/lib/flags";
 
@@ -13,15 +14,30 @@ type PlanResp = {
   email?: string | null;
 };
 
-function Pill({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "neutral" | "success" }) {
+function Pill({
+  children,
+  tone = "neutral",
+}: {
+  children: React.ReactNode;
+  tone?: "neutral" | "success";
+}) {
   const tones: Record<string, string> = {
     neutral: "bg-neutral-900/40 border border-neutral-800 text-neutral-200",
     success: "bg-green-900/20 border border-green-600/50 text-green-200",
   };
-  return <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${tones[tone]}`}>{children}</span>;
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${tones[tone]}`}
+    >
+      {children}
+    </span>
+  );
 }
 
 export default function AccountPage() {
+  const router = useRouter();
+  const sp = useSearchParams();
+
   const [loading, setLoading] = useState(true);
   const [plan, setPlan] = useState<Plan>("FREE");
   const [proUntil, setProUntil] = useState<Date | null>(null);
@@ -41,6 +57,7 @@ export default function AccountPage() {
       setProUntil(data?.proUntil ? new Date(data.proUntil) : null);
       setUserName(data?.name ?? null);
       setUserEmail(data?.email ?? null);
+      setErrorMsg("");
     } catch (e: any) {
       setErrorMsg(e?.message || "Could not load plan info.");
       setPlan("FREE");
@@ -57,13 +74,42 @@ export default function AccountPage() {
     return () => window.removeEventListener("juicedstats:plan-updated", onUpd);
   }, []);
 
-  const badge = plan === "FREE" ? <Pill>Free</Pill> : plan === "SEASON" ? <Pill tone="success">Pro — Season</Pill> : <Pill tone="success">Pro — Monthly</Pill>;
+  // If a logged-out user hits /account?upgrade=1, send them to Sign In automatically.
+  useEffect(() => {
+    const wantsUpgrade = sp.get("upgrade") === "1";
+    if (!loading && wantsUpgrade && !userEmail) {
+      const cb = "/account?upgrade=1";
+      router.push(`/api/auth/signin?callbackUrl=${encodeURIComponent(cb)}`);
+    }
+  }, [sp, loading, userEmail, router]);
+
+  const badge =
+    plan === "FREE" ? (
+      <Pill>Free</Pill>
+    ) : plan === "SEASON" ? (
+      <Pill tone="success">Pro — Season</Pill>
+    ) : (
+      <Pill tone="success">Pro — Monthly</Pill>
+    );
 
   async function startCheckout() {
     try {
       setCtaLoading(true);
       setErrorMsg("");
-      const res = await fetch(`/api/billing/checkout?plan=season`, { headers: { Accept: "application/json" } });
+
+      const res = await fetch(`/api/billing/checkout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ mode: "season" }),
+      });
+
+      // Not signed in? Bounce to sign in and come back here.
+      if (res.status === 401) {
+        const cb = "/account?upgrade=1";
+        router.push(`/api/auth/signin?callbackUrl=${encodeURIComponent(cb)}`);
+        return;
+      }
+
       const txt = await res.text();
       const data = JSON.parse(txt);
       if (!res.ok || !data?.url) throw new Error(data?.error || "Upgrade failed to initialize.");
@@ -79,10 +125,22 @@ export default function AccountPage() {
     try {
       setPortalLoading(true);
       setErrorMsg("");
-      const res = await fetch(`/api/billing/portal`, { headers: { Accept: "application/json" } });
+
+      const res = await fetch(`/api/billing/portal`, {
+        method: "POST",
+        headers: { Accept: "application/json" },
+      });
+
+      if (res.status === 401) {
+        const cb = "/account";
+        router.push(`/api/auth/signin?callbackUrl=${encodeURIComponent(cb)}`);
+        return;
+      }
+
       const txt = await res.text();
       const data = JSON.parse(txt);
-      if (!res.ok || !data?.url) throw new Error(data?.error || "Could not open billing portal.");
+      if (!res.ok || !data?.url)
+        throw new Error(data?.error || "Could not open billing portal.");
       window.location.href = data.url as string;
     } catch (e: any) {
       setErrorMsg(e?.message || "Could not open billing portal.");
@@ -95,13 +153,10 @@ export default function AccountPage() {
 
   return (
     <div className="space-y-6">
-      {/* ✅ Wrap anything that uses useSearchParams in Suspense */}
-      <Suspense fallback={null}>
-        <VerifyAfterCheckout />
-      </Suspense>
+      <VerifyAfterCheckout />
 
       <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 p-5">
-        <h1 className="text-2xl font-semibold mb-4">Account</h1>
+        <h1 className="mb-4 text-2xl font-semibold">Account</h1>
 
         <div className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-900/60 p-4">
           <div className="flex items-center gap-3">
@@ -117,14 +172,20 @@ export default function AccountPage() {
         </div>
 
         <div className="mt-6 rounded-xl border border-neutral-800 bg-neutral-950/40">
-          <div className="p-4 border-b border-neutral-800">
+          <div className="border-b border-neutral-800 p-4">
             <div className="flex items-center justify-between">
               <div className="text-lg font-semibold">Plan</div>
               <div className="flex gap-2">
-                <Link href="/" className="rounded-lg border border-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-900">
+                <Link
+                  href="/"
+                  className="rounded-lg border border-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-900"
+                >
                   ← Back to Research
                 </Link>
-                <button onClick={refreshPlan} className="rounded-lg border border-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-900">
+                <button
+                  onClick={refreshPlan}
+                  className="rounded-lg border border-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-900"
+                >
                   {loading ? "Refreshing…" : "Refresh"}
                 </button>
                 {plan === "MONTHLY" && (
@@ -140,11 +201,11 @@ export default function AccountPage() {
             </div>
           </div>
 
-          <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-4 p-4 md:grid-cols-3">
             {/* Current */}
             <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
-              <div className="text-sm text-neutral-400 mb-1">Current Plan</div>
-              <div className="text-lg font-semibold mb-1">
+              <div className="mb-1 text-sm text-neutral-400">Current Plan</div>
+              <div className="mb-1 text-lg font-semibold">
                 {plan === "FREE" ? "Free" : plan === "SEASON" ? "Pro — Season" : "Pro — Monthly"}
               </div>
               {plan !== "FREE" && proUntil ? (
@@ -162,18 +223,32 @@ export default function AccountPage() {
               )}
             </div>
 
-            {/* Value bullets (expanded) */}
+            {/* Value bullets */}
             <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
-              <div className="text-sm text-neutral-400 mb-2">Pro features</div>
+              <div className="mb-2 text-sm text-neutral-400">Pro features</div>
               <ul className="space-y-1.5 text-sm">
                 <li>• Full season logs (no cap)</li>
-                <li>• Advanced filters: <span className="font-medium">Min Minutes, Opponent, Rest</span></li>
-                <li>• <span className="font-medium">EV / $100</span> (expected profit per $100 bet)</li>
-                <li>• <span className="font-medium">Confidence</span> (probability your edge is +EV)</li>
-                <li>• <span className="font-medium">Fair Line</span> model vs book line</li>
-                <li>• <span className="font-medium">Edge Finder</span> highlights (L10, home/away, matchup)</li>
-                <li>• <span className="font-medium">CSV Export</span> for logs</li>
-                <li>• <span className="font-medium">Save Views</span> for quick recall</li>
+                <li>
+                  • Advanced filters: <span className="font-medium">Min Minutes, Opponent, Rest</span>
+                </li>
+                <li>
+                  • <span className="font-medium">EV / $100</span> (expected profit per $100 bet)
+                </li>
+                <li>
+                  • <span className="font-medium">Confidence</span> (probability your edge is +EV)
+                </li>
+                <li>
+                  • <span className="font-medium">Fair Line</span> model vs book line
+                </li>
+                <li>
+                  • <span className="font-medium">Edge Finder</span> highlights (L10, home/away, matchup)
+                </li>
+                <li>
+                  • <span className="font-medium">CSV Export</span> for logs
+                </li>
+                <li>
+                  • <span className="font-medium">Save Views</span> for quick recall
+                </li>
                 <li>• Higher usage limits during busy slates</li>
               </ul>
               <div className="mt-3 text-xs text-neutral-400">
@@ -182,10 +257,10 @@ export default function AccountPage() {
             </div>
 
             {/* Upgrade CTA */}
-            <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4 flex flex-col justify-between">
+            <div className="flex flex-col justify-between rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
               <div>
-                <div className="text-sm text-neutral-400 mb-1">Upgrade</div>
-                <div className="text-lg font-semibold mb-2">Pro — Season Pass</div>
+                <div className="mb-1 text-sm text-neutral-400">Upgrade</div>
+                <div className="mb-2 text-lg font-semibold">Pro — Season Pass</div>
                 <div className="text-xs text-neutral-400">
                   One-time purchase for the season. Billing portal appears if you switch to Monthly later.
                 </div>
@@ -200,7 +275,10 @@ export default function AccountPage() {
                     {ctaLoading ? "Starting checkout…" : "Upgrade to Pro — Season"}
                   </button>
                 ) : (
-                  <button disabled className="w-full rounded-lg border border-neutral-800 px-4 py-2 text-sm text-neutral-400">
+                  <button
+                    disabled
+                    className="w-full rounded-lg border border-neutral-800 px-4 py-2 text-sm text-neutral-400"
+                  >
                     You’re already Pro
                   </button>
                 )}

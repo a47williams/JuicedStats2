@@ -1,37 +1,39 @@
 // components/BetaBanner.tsx
-"use client";
+import Link from "next/link";
 
-type Props = {
-  code?: string; // promo code to show on the right
-};
-
-export default function BetaBanner({ code }: Props) {
+export default function BetaBanner({
+  code = "EARLYBIRD25",
+  showUpgrade = true,
+}: {
+  code?: string;
+  showUpgrade?: boolean;
+}) {
   return (
-    <div className="w-full bg-amber-900/20 text-amber-200">
-      <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-3 py-2 text-xs md:text-sm">
-        <div className="truncate">
-          {/* Mobile-short + Desktop-long copy */}
-          <span className="md:hidden">
-            🔓 Open Beta: Pro free until Oct 1.
-          </span>
-          <span className="hidden md:inline">
-            Pro features free until Oct 1. Pricing then: Day $3 · Week $7 · Monthly $14.99 · Season $99.
+    <div className="
+      border-t border-b
+      bg-amber-100 text-amber-900 border-amber-200
+      dark:bg-amber-900/25 dark:text-amber-100 dark:border-amber-800
+    ">
+      <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-2">
+        <div className="text-xs sm:text-sm">
+          <span className="font-medium">Pro features free until Oct 1.</span>{" "}
+          Pricing then: Day $3 · Week $7 · Monthly $14.99 · Season $99.
+          <span className="
+            ml-2 inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-semibold
+            bg-emerald-600 text-white
+          ">
+            25% off season with code: {code}
           </span>
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
-          {code ? (
-            <span className="hidden rounded-md bg-emerald-600/20 px-2 py-1 text-emerald-300 md:inline">
-              25% off season until Oct 1 (code: <strong>{code}</strong>)
-            </span>
-          ) : null}
-          <a
+        {showUpgrade && (
+          <Link
             href="/account?upgrade=1"
-            className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-semibold text-black hover:bg-emerald-500"
+            className="shrink-0 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
           >
             Upgrade
-          </a>
-        </div>
+          </Link>
+        )}
       </div>
     </div>
   );

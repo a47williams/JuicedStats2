@@ -1,49 +1,43 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import type { Plan } from "@/lib/flags";
 import { prisma } from "@/lib/prisma";
+import { auth } from "@/auth";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-type Plan = "FREE" | "SEASON" | "MONTHLY";
-
-function normalizePlan(plan: Plan | null | undefined, proUntil: Date | null | undefined): Plan {
-  if (!proUntil || isNaN(proUntil.getTime()) || proUntil.getTime() <= Date.now()) return "FREE";
-
-  // If DB says MONTHLY but proUntil looks like end-of-season (legacy bug), treat as SEASON for display.
-  const m = proUntil.getMonth(); // 0=Jan
-  const d = proUntil.getDate();
-  const looksSeasonEnd = m === 5 && d >= 25 && d <= 30; // late June
-  if ((plan === "MONTHLY" || plan === null || plan === undefined) && looksSeasonEnd) return "SEASON";
-
-  return (plan as Plan) ?? "FREE";
-}
 
 export async function GET() {
   try {
     const session = await auth();
-    const email = session?.user?.email ?? null;
-    const name = session?.user?.name ?? null;
 
-    if (!email) {
-      return NextResponse.json({ ok: true, plan: "FREE", proUntil: null, name, email });
+    // If not signed in, return a valid JSON payload (avoid client JSON parse errors)
+    if (!session?.user?.email) {
+      return NextResponse.json(
+        { ok: true, plan: "FREE" satisfies Plan, proUntil: null, name: null, email: null },
+        { status: 200 }
+      );
     }
 
-    const user = await prisma.user.findUnique({ where: { email } });
-
-    const rawPlan = (user?.plan as Plan | undefined) ?? "FREE";
-    const rawUntil = user?.proUntil ? new Date(user.proUntil) : null;
-    const plan = normalizePlan(rawPlan, rawUntil);
-
-    return NextResponse.json({
-      ok: true,
-      plan,
-      proUntil: rawUntil,
-      name,
-      email,
+    const email = session.user.email;
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: { name: true, email: true, plan: true, proUntil: true },
     });
-  } catch (err: any) {
-    console.error("[/api/account/plan] error", err?.message || err);
-    return NextResponse.json({ ok: true, plan: "FREE", proUntil: null }, { status: 200 });
+
+    const plan = (user?.plan as Plan) ?? "FREE";
+    return NextResponse.json(
+      {
+        ok: true,
+        plan,
+        proUntil: user?.proUntil ?? null,
+        name: user?.name ?? session.user.name ?? null,
+        email: user?.email ?? email,
+      },
+      { status: 200 }
+    );
+  } catch (e: any) {
+    return NextResponse.json(
+      { ok: false, plan: "FREE" as Plan, proUntil: null, error: e?.message ?? "Failed to load plan" },
+      { status: 200 }
+    );
   }
 }

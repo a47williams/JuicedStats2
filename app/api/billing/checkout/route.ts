@@ -8,7 +8,6 @@ type Body = Partial<{
   mode: "season" | "monthly";
   successUrl: string;
   cancelUrl: string;
-  coupon: string; // optional, still allow promo codes in Checkout
 }>;
 
 export async function POST(req: NextRequest) {
@@ -27,21 +26,20 @@ export async function POST(req: NextRequest) {
   const isSubscription = selected === "monthly";
 
   const success_url =
-    body.successUrl ?? `${process.env.NEXT_PUBLIC_APP_URL}/account?success=1`;
+    body.successUrl ?? `${process.env.NEXT_PUBLIC_APP_URL}/account?checkout=success`;
   const cancel_url =
     body.cancelUrl ?? `${process.env.NEXT_PUBLIC_APP_URL}/account?canceled=1`;
 
-  // 👇 Explicit type so TS knows `mode` is valid at the top level
   const params: Stripe.Checkout.SessionCreateParams = {
     mode: isSubscription ? "subscription" : "payment",
     line_items: [{ price: priceId, quantity: 1 }],
-    customer_email: session.user.email,
+    customer_email: session.user.email!,
     allow_promotion_codes: true,
     success_url,
     cancel_url,
     metadata: {
       purchase_mode: selected,
-      userEmail: session.user.email,
+      userEmail: session.user.email!,
     },
   };
 
