@@ -1,11 +1,15 @@
 import "./globals.css";
 import { Inter } from "next/font/google";
-import Providers from "@/components/Providers";
 import Logo from "@/components/Logo";
 import ThemeToggle from "@/components/ThemeToggle";
 import AuthButtons from "@/components/AuthButtons";
+import Providers from "@/components/Providers";
+import BetaBanner from "@/components/BetaBanner"; // ← keep ONLY this one
+
 const inter = Inter({ subsets: ["latin"] });
-export const metadata = { title: "JuicedStats", description: "NBA Prop Research", icons: { icon: "/favicon.ico" } };
+const PROMO_CODE = process.env.NEXT_PUBLIC_STRIPE_PROMO_CODE || "EARLYBIRD25";
+const isEarlyBird = true; // or your date check
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
@@ -20,6 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <span className="text-[10px] text-gray-400">v0.1</span>
               </div>
             </div>
+            {isEarlyBird && <BetaBanner code={PROMO_CODE} />}
           </header>
           {children}
         </Providers>

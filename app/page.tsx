@@ -1,789 +1,596 @@
-'use client';
+"use client";
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import SaveViewButton from '@/components/SaveViewButton';
+import { useCallback, useMemo, useState } from "react";
+import PlayerSearchBox from "@/components/PlayerSearchBox";
+import SaveViewButton from "@/components/SaveViewButton";
 
-/* ------------------------------ Types ------------------------------ */
-
-type StatKey =
-  | 'Points'
-  | 'Rebounds'
-  | 'Assists'
-  | '3PTM'
-  | 'PRA'
-  | 'PR'
-  | 'PA'
-  | 'RA'
-  | 'Stocks';
-
-type GameRow = {
-  date: string; // ISO
-  opp?: string;
-  ha?: 'H' | 'A';
-  min?: number | string;
-  pts?: number;
-  reb?: number;
-  ast?: number;
-  fg3m?: number;
-  ['3PTM']?: number;
-  ['3pm']?: number;
-  tpm?: number;
-  blk?: number;
-  stl?: number;
-  tov?: number | null;
-  turnover?: number | null;
-  team?: string;
-  teamScore?: number;
-  oppScore?: number;
-  result?: 'W' | 'L' | 'T';
+// ====== Utilities ======
+const TEAM_ID_TO_ABBR: Record<number, string> = {
+  1: "ATL", 2: "BOS", 3: "BKN", 4: "CHA", 5: "CHI", 6: "CLE", 7: "DAL", 8: "DEN",
+  9: "DET", 10: "GSW", 11: "HOU", 12: "IND", 13: "LAC", 14: "LAL", 15: "MEM",
+  16: "MIA", 17: "MIL", 18: "MIN", 19: "NOP", 20: "NYK", 21: "OKC", 22: "ORL",
+  23: "PHI", 24: "PHX", 25: "POR", 26: "SAC", 27: "SAS", 28: "TOR", 29: "UTA",
+  30: "WAS",
 };
 
-type PlayerOption = { id: number; name: string; teamTri?: string };
-
-/* --------------------------- Small helpers -------------------------- */
-
-function n(x: any): number {
-  const v = typeof x === 'number' ? x : parseFloat(String(x ?? ''));
-  return Number.isFinite(v) ? v : 0;
+// American odds → break-even probability (implied)
+function breakevenProb(american: number): number {
+  if (!isFinite(american) || american === 0) return NaN;
+  return american > 0 ? 100 / (american + 100) : Math.abs(american) / (Math.abs(american) + 100);
 }
-function avg(xs: number[]): number {
-  if (!xs.length) return 0;
-  let s = 0;
-  for (let i = 0; i < xs.length; i++) s += xs[i];
-  return s / xs.length;
-}
-function recencyWeightedAvg(values: number[], weightPct: number): number {
-  if (!values.length) return 0;
-  if (weightPct <= 0) return avg(values);
-  const base = 1 - Math.min(0.9, weightPct / 100) * 0.5; // 1..0.55
-  let wsum = 0;
-  let s = 0;
-  for (let i = values.length - 1, age = 0; i >= 0; i--, age++) {
-    const w = Math.pow(base, age);
-    wsum += w;
-    s += values[i] * w;
-  }
-  return s / wsum;
-}
-function valueForStat(row: GameRow, stat: StatKey): number {
-  const pts = n(row.pts);
-  const reb = n(row.reb);
-  const ast = n(row.ast);
-  const stl = n(row.stl);
-  const blk = n(row.blk);
-  const threes =
-    n((row as any).fg3m) ??
-    n((row as any)['3PTM']) ??
-    n((row as any)['3pm']) ??
-    n((row as any).tpm);
 
+// profit (not payout) for a $100 stake at given American odds
+function profitPer100(american: number): number {
+  if (!isFinite(american) || american === 0) return 0;
+  return american > 0 ? american : 100 * (100 / Math.abs(american));
+}
+
+function clamp01(x: number) {
+  return Math.max(0, Math.min(1, x));
+}
+
+function fmtPct(x: number | null | undefined, digits = 0) {
+  if (x == null || !isFinite(x)) return "—";
+  return `${(100 * x).toFixed(digits)}%`;
+}
+
+function mean(nums: number[]) {
+  if (!nums.length) return 0;
+  return nums.reduce((a, b) => a + b, 0) / nums.length;
+}
+
+function median(nums: number[]) {
+  if (!nums.length) return 0;
+  const s = [...nums].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+function wilsonUpperLower(pHat: number, n: number, z = 1.96) {
+  // Wilson score interval
+  if (n === 0) return { lo: 0, hi: 0 };
+  const denom = 1 + (z ** 2) / n;
+  const center = (pHat + (z ** 2) / (2 * n)) / denom;
+  const margin = (z * Math.sqrt((pHat * (1 - pHat)) / n + (z ** 2) / (4 * n ** 2))) / denom;
+  return { lo: Math.max(0, center - margin), hi: Math.min(1, center + margin) };
+}
+
+// Normal CDF approximation (Abramowitz & Stegun 26.2.17)
+function normalCDF(x: number) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(x));
+  const d = 0.3989422804014327 * Math.exp(-(x * x) / 2); // 1/√(2π) * e^(−x²/2)
+  const poly =
+    t *
+    (0.319381530 +
+      t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  const p = 1 - d * poly;
+  return x >= 0 ? p : 1 - p;
+}
+
+// ====== Stat mapping ======
+type StatKey =
+  | "pts" | "reb" | "ast" | "stl" | "blk" | "to"
+  | "pra" | "pr" | "pa" | "ra" | "stocks";
+
+const STAT_OPTIONS: { key: StatKey; label: string }[] = [
+  { key: "pts", label: "Points" },
+  { key: "reb", label: "Rebounds" },
+  { key: "ast", label: "Assists" },
+  { key: "stl", label: "Steals" },
+  { key: "blk", label: "Blocks" },
+  { key: "to",  label: "Turnovers" },
+  { key: "pra", label: "PRA" },
+  { key: "pr",  label: "PR"  },
+  { key: "pa",  label: "PA"  },
+  { key: "ra",  label: "RA"  },
+  { key: "stocks", label: "Stocks" },
+];
+
+const REST_OPTIONS: { value: "" | "0" | "1" | "2" | "3+"; label: string }[] = [
+  { value: "",   label: "Any" },
+  { value: "0",  label: "0 days (2nd night of back-to-back)" },
+  { value: "1",  label: "1 day rest" },
+  { value: "2",  label: "2 days rest" },
+  { value: "3+", label: "3+ days rest" },
+];
+
+type LogRow = {
+  date: string; // YYYY-MM-DD
+  opp?: number | string;
+  ha?: "H" | "A" | "";
+  min?: number;
+  pts?: number; reb?: number; ast?: number; stl?: number; blk?: number; to?: number; "3ptm"?: number;
+};
+
+function computeStat(row: LogRow, stat: StatKey): number {
+  const pts = row.pts ?? 0;
+  const reb = row.reb ?? 0;
+  const ast = row.ast ?? 0;
+  const stl = row.stl ?? 0;
+  const blk = row.blk ?? 0;
+  const tov = row.to  ?? 0;
   switch (stat) {
-    case 'Points': return pts;
-    case 'Rebounds': return reb;
-    case 'Assists': return ast;
-    case '3PTM': return threes;
-    case 'PRA': return pts + reb + ast;
-    case 'PR': return pts + reb;
-    case 'PA': return pts + ast;
-    case 'RA': return reb + ast;
-    case 'Stocks': return stl + blk;
+    case "pts": return pts;
+    case "reb": return reb;
+    case "ast": return ast;
+    case "stl": return stl;
+    case "blk": return blk;
+    case "to":  return tov;
+    case "pra": return pts + reb + ast;
+    case "pr":  return pts + reb;
+    case "pa":  return pts + ast;
+    case "ra":  return reb + ast;
+    case "stocks": return stl + blk;
     default: return 0;
   }
 }
 
-/* --------------------------- UI blurbs text -------------------------- */
+// ====== Page ======
+export default function HomePage() {
+  // form state
+  const [playerQuery, setPlayerQuery] = useState("");
+  const [playerId, setPlayerId] = useState<string | null>(null);
+  const [playerName, setPlayerName] = useState("");
 
-const KPI_BLURBS: Record<string, string> = {
-  'SEASON AVG': 'Average of the chosen stat across the games shown.',
-  'HOME AVG': 'Average when the player was at home.',
-  'AWAY AVG': 'Average when the player was away.',
-  'WEIGHTED AVG': 'Recent games count more than older games.',
-  'LAST 3 AVG': 'Average over the most recent 3 games.',
-  'LAST 5 AVG': 'Average over the most recent 5 games.',
-  'HIT RATE': 'How often the player met or beat your Prop Line here.',
-  'GAMES / DISTRIB': 'How many games, plus min/median/max to show spread.',
-  'BREAK-EVEN %': 'The success rate needed to break even at your odds.',
-  'PROFIT IF WIN ($100)': 'Payout on a $100 winning bet (before fees/taxes).',
-  'EV / $100': 'Expected profit or loss per $100 bet using Hit% and odds.',
-};
+  const [season, setSeason] = useState("2024-25");
+  const seasonNum = Number(season.split("-")[0]) || undefined;
 
-/* ------------------------- Confidence helpers ------------------------ */
+  const [statKey, setStatKey] = useState<StatKey>("pts");
+  const [lastX, setLastX] = useState("");             // blank = all
+  const [minMinutes, setMinMinutes] = useState("");   // blank = none
+  const [homeAway, setHomeAway] = useState<"" | "H" | "A">("");
+  const [opp, setOpp] = useState("");
+  const [rest, setRest] = useState<"" | "0" | "1" | "2" | "3+">("");
 
-function americanToWinPayout(odds: number): number {
-  if (!Number.isFinite(odds) || odds === 0) return 0;
-  return odds > 0 ? odds : (100 / Math.abs(odds)) * 100;
-}
-function confidenceFromEV(ev100: number, sample: number) {
-  const s = Math.max(0, Math.min(sample, 60));
-  const loosen = s < 12 ? 12 - s : 0;
-  const good = 8 + loosen;
-  const ok = 2 + loosen;
-  if (ev100 >= good) return { label: 'Good', color: 'bg-emerald-500', text: 'text-emerald-100' };
-  if (ev100 >= ok) return { label: 'Okay', color: 'bg-amber-500', text: 'text-amber-100' };
-  return { label: 'Risky', color: 'bg-rose-500', text: 'text-rose-100' };
-}
+  const [propLine, setPropLine] = useState("");
+  const [odds, setOdds] = useState("");
 
-/* ----------------------------- Component ----------------------------- */
+  // data state
+  const [logs, setLogs] = useState<LogRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-export default function Home() {
-  // Form state
-  const [playerText, setPlayerText] = useState(''); // placeholder only
-  const [season, setSeason] = useState<number>(
-    new Date().getMonth() >= 9 ? new Date().getFullYear() : new Date().getFullYear() - 1
-  ); // NBA uses start year
-  const [stat, setStat] = useState<StatKey>('Points');
-  const [lastX, setLastX] = useState<string>(''); // blank = all
-  const [homeAway, setHomeAway] = useState<'Any' | 'H' | 'A'>('Any');
-  const [opponent, setOpponent] = useState('Any');
-  const [propLine, setPropLine] = useState<string>(''); // placeholder only
-  const [odds, setOdds] = useState<string>('');         // placeholder only
-  const [minMinutes, setMinMinutes] = useState<string>('');
-  const [postseason, setPostseason] = useState(false);
-  const [includeZero, setIncludeZero] = useState(false);
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
-  const [recency, setRecency] = useState<number>(0);
+  const onPlayerSelect = (p: { id: string | number; full_name?: string; name?: string } | null) => {
+    if (!p) {
+      setPlayerId(null);
+      setPlayerName("");
+      return;
+    }
+    const nm = p.full_name || p.name || "";
+    setPlayerId(String(p.id));
+    setPlayerName(nm);
+    setPlayerQuery(nm);
+  };
 
-  // Data
-  const [players, setPlayers] = useState<PlayerOption[]>([]);
-  const [selected, setSelected] = useState<{ id: number; name: string } | null>(null);
-  const [showStart, setShowStart] = useState(true);
-  const [games, setGames] = useState<GameRow[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string>('');
-
-  const suggestRef = useRef<HTMLDivElement>(null);
-
-  /* ------------------------ Player autocomplete ------------------------ */
-
-  useEffect(() => {
-    const q = playerText.trim();
-    if (!q) { setPlayers([]); return; }
-
-    const ctrl = new AbortController();
-    const t = setTimeout(async () => {
-      try {
-        const r = await fetch(`/api/game-logs/players?q=${encodeURIComponent(q)}`, { signal: ctrl.signal, cache: 'no-store' });
-        if (!r.ok) return;
-        const j = await r.json();
-
-        // Accept either {players:[{id,name,teamTri}]} or {hits:[{id,full_name,team}]}
-        const list: PlayerOption[] = Array.isArray(j?.players)
-          ? j.players
-          : Array.isArray(j?.hits)
-            ? j.hits.map((h: any) => ({ id: h.id, name: h.full_name, teamTri: (h.team || '').slice(0,3) }))
-            : [];
-
-        setPlayers(list);
-
-        if (selected && selected.name.toLowerCase() !== q.toLowerCase()) {
-          setSelected(null);
-        }
-      } catch {}
-    }, 200);
-
-    return () => { clearTimeout(t); ctrl.abort(); };
-  }, [playerText, selected]);
-
-  function resolvedPlayerId(): number | null {
-    if (selected?.id) return selected.id;
-    const name = playerText.trim().toLowerCase();
-    if (!name || !players.length) return null;
-    const exact =
-      players.find((p) => p.name.toLowerCase() === name) ??
-      players.find((p) => name.includes(p.name.toLowerCase())) ??
-      players.find((p) => p.name.toLowerCase().includes(name));
-    return exact?.id ?? null;
-  }
-
-  /* ----------------------------- Fetch logs ---------------------------- */
-
-  async function fetchGameLogs() {
-    setErr('');
-    setBusy(true);
-    setGames([]);
+  // fetch logs
+  const fetchLogs = useCallback(async () => {
     try {
-      const playerId = resolvedPlayerId();
-      if (!playerId) {
-        setErr('Player not found');
+      setLoading(true);
+      setError(null);
+      setLogs([]);
+
+      if (!playerId || !seasonNum) {
+        setError("Choose a player and season.");
+        setLoading(false);
         return;
       }
 
-      const payload = {
-        playerId,
-        season,
-        stat,
-        lastX: lastX.trim() ? Number(lastX.trim()) : undefined,
-        ha: homeAway === 'Any' ? undefined : homeAway,
-        opp: opponent === 'Any' ? undefined : opponent,
-        propLine: propLine.trim() ? Number(propLine.trim()) : undefined,
-        minMinutes: minMinutes.trim() ? Number(minMinutes.trim()) : undefined,
-        postseason,
-        includeZeroMin: includeZero,
-        startDate: startDate || undefined,
-        endDate: endDate || undefined,
-      };
+      const url = new URL("/api/game-logs", window.location.origin);
+      url.searchParams.set("playerId", playerId);
+      url.searchParams.set("season", String(seasonNum));
+      url.searchParams.set("stat", statKey);
+      if (lastX.trim() !== "") url.searchParams.set("lastX", String(Number(lastX)));
+      if (minMinutes.trim() !== "") url.searchParams.set("min", String(Number(minMinutes)));
+      if (homeAway) url.searchParams.set("ha", homeAway);
+      if (opp.trim() !== "") url.searchParams.set("opp", opp.trim().toUpperCase());
+      if (rest) url.searchParams.set("rest", rest);
 
-      const res = await fetch('/api/game-logs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(`Failed to fetch game logs (${res.status}): ${t}`);
+      const res = await fetch(url.toString(), { cache: "no-store" });
+      const j = await res.json();
+      if (!res.ok || !j?.ok) {
+        setError(j?.error || "Could not fetch logs.");
+        setLoading(false);
+        return;
       }
-
-      const data = await res.json();
-
-      // Accept either object rows or array rows (normalize).
-      const rawRows = Array.isArray(data?.rows) ? data.rows : [];
-      const rows: GameRow[] = rawRows.map((r: any) => {
-        if (Array.isArray(r)) {
-          const [
-            date, opp, ha, minStr, pts, reb, ast, fg3m, blk, stl, turnovers,
-            teamPts, oppPts, result, /*gameId*/, teamAbbr,
-          ] = r;
-          return {
-            date: String(date),
-            opp: opp,
-            ha: ha,
-            min: minStr,
-            pts: n(pts),
-            reb: n(reb),
-            ast: n(ast),
-            fg3m: n(fg3m),
-            blk: n(blk),
-            stl: n(stl),
-            tov: n(turnovers),
-            team: teamAbbr,
-            teamScore: n(teamPts),
-            oppScore: n(oppPts),
-            result: result,
-          } as GameRow;
-        }
-        return {
-          ...r,
-          pts: n(r.pts),
-          reb: n(r.reb),
-          ast: n(r.ast),
-          stl: n(r.stl),
-          blk: n(r.blk),
-          min: typeof r.min === 'string' ? r.min : n(r.min),
-          fg3m:
-            n((r as any).fg3m) ??
-            n((r as any)['3PTM']) ??
-            n((r as any)['3pm']) ??
-            n((r as any).tpm),
-        } as GameRow;
-      });
-
-      setGames(rows);
-      setShowStart(false);
+      const rows: LogRow[] = Array.isArray(j.logs) ? j.logs : [];
+      setLogs(rows);
     } catch (e: any) {
-      setErr(e?.message || 'Unknown error');
+      setError(e?.message || "Could not fetch logs.");
     } finally {
-      setBusy(false);
+      setLoading(false);
     }
-  }
+  }, [playerId, seasonNum, statKey, lastX, minMinutes, homeAway, opp, rest]);
 
-  /* ----------------------------- KPIs/EV ------------------------------ */
-
-  const series = useMemo(() => games.map((g) => valueForStat(g, stat)), [games, stat]);
-  const kpis = useMemo(() => {
-    if (!series.length) {
-      return {
-        seasonAvg: 0, homeAvg: 0, awayAvg: 0,
-        last3: 0, last5: 0, weighted: 0,
-        gamesCount: 0, min: 0, med: 0, max: 0
-      };
-    }
-    const seasonAvg = avg(series);
-    const last3 = avg(series.slice(-3));
-    const last5 = avg(series.slice(-5));
-    const weighted = recencyWeightedAvg(series, recency);
-
-    const homeVals = games.filter(g => g.ha === 'H').map(g => valueForStat(g, stat));
-    const awayVals = games.filter(g => g.ha === 'A').map(g => valueForStat(g, stat));
-    const homeAvg = avg(homeVals);
-    const awayAvg = avg(awayVals);
-
-    const sorted = [...series].sort((a,b) => a - b);
-    const med = sorted.length ? sorted[Math.floor(sorted.length/2)] : 0;
-
-    return {
-      seasonAvg, homeAvg, awayAvg, last3, last5, weighted,
-      gamesCount: series.length,
-      min: sorted[0] ?? 0,
-      med, max: sorted[sorted.length - 1] ?? 0
-    };
-  }, [series, games, stat, recency]);
-
-  // Hit rate (needs prop line)
-  const propNum = propLine.trim() ? Number(propLine.trim()) : NaN;
-  const hitRate = useMemo(() => {
-    if (!series.length || !Number.isFinite(propNum)) return 0;
-    const hits = series.filter(v => v >= propNum).length;
-    return (hits / series.length) * 100;
-  }, [series, propNum]);
-
-  // Pricing inputs
-  const oddsNum = Number(odds.trim() || NaN);
-  const hasProp = Number.isFinite(propNum);
-  const hasOdds = Number.isFinite(oddsNum);
-  const canPrice = hasProp && hasOdds;
-
-  // Break-even & win payout (we still compute; not required to blank)
-  const breakEvenPct = hasOdds
-    ? (oddsNum > 0 ? 100 / (oddsNum + 100) : Math.abs(oddsNum) / (Math.abs(oddsNum) + 100)) * 100
-    : 0;
-  const winPayout = hasOdds ? americanToWinPayout(oddsNum) : 0;
-
-  // EV per $100 — only meaningful when BOTH prop line and odds exist
-  const ev100Raw = (hitRate / 100) * winPayout - (1 - hitRate / 100) * 100;
-  const ev100 = canPrice ? ev100Raw : 0;
-  const confidence = canPrice ? confidenceFromEV(ev100, games.length) : null;
-
-  /* --------------------------- UI components -------------------------- */
-
-  const defaultViewName = [
-    playerText || 'Player',
-    stat,
-    propLine ? `@ ${propLine}` : '',
-    season,
-    homeAway !== 'Any' ? homeAway : '',
-    opponent !== 'Any' ? opponent : '',
-    lastX ? `L${lastX}` : '',
-  ].filter(Boolean).join(' • ');
-
-  const viewParams = {
-    playerText,
-    playerId: resolvedPlayerId(),
-    stat,
-    season,
-    propLine,
-    odds,
-    lastX,
-    homeAway,
-    opponent,
-    minMinutes,
-    postseason,
-    includeZero,
-    startDate,
-    endDate,
-    recency
+  const reset = () => {
+    setPlayerQuery(""); setPlayerId(null); setPlayerName("");
+    setSeason("2024-25");
+    setStatKey("pts");
+    setLastX("");
+    setMinMinutes("");
+    setHomeAway("");
+    setOpp("");
+    setRest("");
+    setPropLine("");
+    setOdds("");
+    setLogs([]); setError(null);
   };
 
+  // derived lists
+  const cleanLogs = useMemo(() => {
+    const rows = (logs || []).filter(r => (r.min ?? 0) > 0); // auto-exclude 0 minutes
+    rows.sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : 0));
+    return rows;
+  }, [logs]);
+
+  const statSeries = useMemo(
+    () => cleanLogs.map(r => computeStat(r, statKey)),
+    [cleanLogs, statKey]
+  );
+
+  const gamesCount = statSeries.length;
+  const seasonAvg = mean(statSeries);
+  const homeAvg = mean(cleanLogs.filter(r => r.ha === "H").map(r => computeStat(r, statKey)));
+  const awayAvg = mean(cleanLogs.filter(r => r.ha === "A").map(r => computeStat(r, statKey)));
+  const weightedAvg = useMemo(() => {
+    if (!statSeries.length) return 0;
+    // recency weight: newest gets ~1.5 → linearly down to 0.5
+    const n = statSeries.length;
+    const weights = statSeries.map((_, i) => 0.5 + (1.0 * (n - i)) / n); // sorted desc
+    const totalW = weights.reduce((a, b) => a + b, 0);
+    return statSeries.reduce((sum, v, i) => sum + v * weights[i], 0) / totalW;
+  }, [statSeries]);
+
+  const last3Avg = mean(statSeries.slice(0, 3));
+  const last5Avg = mean(statSeries.slice(0, 5));
+  const minVal = useMemo(() => (statSeries.length ? Math.min(...statSeries) : 0), [statSeries]);
+  const maxVal = useMemo(() => (statSeries.length ? Math.max(...statSeries) : 0), [statSeries]);
+  const medVal = useMemo(() => median(statSeries), [statSeries]);
+
+  // EV & confidence (only when both inputs given)
+  const numericLine = Number(propLine);
+  const numericOdds = Number(odds);
+  const hasEdgeInputs = isFinite(numericLine) && isFinite(numericOdds) && propLine.trim() !== "" && odds.trim() !== "";
+
+  const hitCount = useMemo(
+    () => (hasEdgeInputs ? statSeries.filter(v => v >= numericLine).length : 0),
+    [statSeries, numericLine, hasEdgeInputs]
+  );
+  const hitRate = hasEdgeInputs && gamesCount > 0 ? hitCount / gamesCount : NaN;
+  const beProb = hasEdgeInputs ? breakevenProb(numericOdds) : NaN;
+  const profit100 = hasEdgeInputs ? profitPer100(numericOdds) : 0;
+  const pOver = hitRate;
+
+  const evPer100 = useMemo(() => {
+    if (!hasEdgeInputs || !isFinite(pOver)) return NaN;
+    return pOver * profit100 - (1 - pOver) * 100;
+  }, [pOver, profit100, hasEdgeInputs]);
+
+  // Confidence = P(true p > breakeven) via normal approx around Wilson center
+  const confidencePct = useMemo(() => {
+    if (!hasEdgeInputs || !gamesCount) return NaN;
+    const pHat = clamp01(pOver);
+    const { lo, hi } = wilsonUpperLower(pHat, gamesCount, 1.64); // ~90%
+    const center = (lo + hi) / 2;
+    const se = Math.max(1e-6, Math.sqrt(center * (1 - center) / gamesCount));
+    const z = (center - beProb) / se;
+    const c = normalCDF(z); // probability that p > breakeven
+    return clamp01(c);
+  }, [hasEdgeInputs, gamesCount, pOver, beProb]);
+
+  const confColor =
+    !isFinite(confidencePct)
+      ? "border-neutral-800"
+      : confidencePct >= 0.6
+      ? "border-emerald-700 bg-emerald-900/20"
+      : confidencePct >= 0.4
+      ? "border-amber-700 bg-amber-900/20"
+      : "border-red-800 bg-red-900/20";
+
+  // CSV export
+  const onExportCSV = () => {
+    if (!cleanLogs.length) return;
+    const cols = ["Date","Opp","H/A","Min","Pts","Reb","Ast","3PTM","Blk","Stl","TO","PRA","PR","PA","RA","Stocks"];
+    const rows = cleanLogs.map(r => {
+      const oppAbbr =
+        typeof r.opp === "string" ? r.opp :
+        typeof r.opp === "number" ? (TEAM_ID_TO_ABBR[r.opp] || String(r.opp)) : "";
+      const pts = r.pts ?? 0, reb = r.reb ?? 0, ast = r.ast ?? 0, stl = r.stl ?? 0, blk = r.blk ?? 0, tov = r.to ?? 0;
+      return [
+        r.date, oppAbbr, r.ha ?? "", r.min ?? 0, pts, reb, ast, r["3ptm"] ?? "-",
+        blk, stl, tov, pts+reb+ast, pts+reb, pts+ast, reb+ast, stl+blk,
+      ].join(",");
+    });
+    const csv = [cols.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `${playerName || "player"}-${statKey}-${season}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ====== UI ======
   return (
-    <main className="mx-auto max-w-6xl px-4 pb-20 pt-6">
-      {/* Getting started helper */}
-      {showStart && !games.length && (
-        <div className="mb-4 rounded-xl border border-neutral-200 bg-white p-4 text-sm shadow-sm dark:border-neutral-700 dark:bg-neutral-900">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-base font-semibold">New here? Start with a sample.</div>
-              <ol className="mt-2 list-inside list-decimal space-y-1 text-neutral-700 dark:text-neutral-300">
-                <li><span className="font-medium">Type a player’s name</span> and pick from the list.</li>
-                <li>Choose a <span className="font-medium">season</span> and <span className="font-medium">stat</span>.</li>
-                <li>Click <span className="font-medium">Fetch Game Logs</span> to see the KPIs.</li>
-              </ol>
-              <div className="mt-3 text-xs text-neutral-500 dark:text-neutral-400">
-                Tip: Season uses the start year (e.g., <b>2024</b> = 2024–25). Prop Line and Odds power Hit% and EV.
-              </div>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <button
-                onClick={() => {
-                  setPlayerText('Jayson Tatum');
-                  setSelected({ id: 434, name: 'Jayson Tatum' });
-                  setStat('Points');
-                  setPropLine('22.5');
-                  setOdds('-110');
-                  setShowStart(false);
-                }}
-                className="rounded-md bg-amber-500 px-3 py-2 text-sm font-medium text-white hover:bg-amber-600"
-              >
-                Load sample (Tatum / Points)
-              </button>
-              <button
-                onClick={() => setShowStart(false)}
-                className="rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-600 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-              >
-                Dismiss
-              </button>
-            </div>
+    <div className="mx-auto max-w-6xl px-4 pb-24">
+      <h1 className="mt-8 text-2xl font-semibold">NBA Prop Research</h1>
+      <p className="mt-1 text-sm text-neutral-400">
+        Search a player → hit “See Stats” → enter prop line & odds to compute EV & confidence.
+      </p>
+
+      {/* FORM */}
+      <div className="mt-6 rounded-xl border border-neutral-800 p-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+          {/* Player */}
+          <div>
+            <label className="mb-1 block text-xs text-neutral-400">Player</label>
+            <PlayerSearchBox value={playerQuery} onChange={setPlayerQuery} onSelect={onPlayerSelect} />
           </div>
-        </div>
-      )}
 
-      {/* Form */}
-      <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-3">
-        <div className="col-span-1">
-          <label className="mb-1 block text-sm text-neutral-600 dark:text-neutral-300">Player (start typing)</label>
-          <div className="relative">
-            <input
-              className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:placeholder-neutral-500"
-              value={playerText}
-              onChange={(e) => setPlayerText(e.target.value)}
-              placeholder="Jayson Tatum"
-              autoComplete="off"
-            />
-            {/* Suggestions */}
-            {players.length > 0 && playerText.trim() && (
-              <div
-                ref={suggestRef}
-                className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900"
-              >
-                {players.slice(0, 20).map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => { setPlayerText(p.name); setSelected({ id: p.id, name: p.name }); setPlayers([]); }}
-                    className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800"
-                  >
-                    <span>{p.name}</span>
-                    {p.teamTri && <span className="text-xs text-neutral-500">{p.teamTri}</span>}
-                  </button>
-                ))}
-              </div>
-            )}
+          {/* Season */}
+          <div>
+            <label className="mb-1 block text-xs text-neutral-400">Season</label>
+            <select
+              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              value={season}
+              onChange={(e) => setSeason(e.target.value)}
+            >
+              <option value="2024-25">2024-25</option>
+              <option value="2023-24">2023-24</option>
+              <option value="2022-23">2022-23</option>
+            </select>
           </div>
-        </div>
 
-        <div>
-          <label className="mb-1 block text-sm text-neutral-600 dark:text-neutral-300">Season (YYYY)</label>
-          <input
-            type="number"
-            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
-            value={season}
-            onChange={(e) => setSeason(Number(e.target.value || 0))}
-          />
-          <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">e.g., 2024 = 2024–25</div>
-        </div>
-
-        <div>
-          <label className="mb-1 block text-sm text-neutral-600 dark:text-neutral-300">Stat</label>
-          <select
-            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
-            value={stat}
-            onChange={(e) => setStat(e.target.value as StatKey)}
-          >
-            {(['Points', 'Rebounds', 'Assists', '3PTM', 'PRA', 'PR', 'PA', 'RA', 'Stocks'] as StatKey[]).map(
-              (s) => <option key={s} value={s}>{s}</option>
-            )}
-          </select>
-        </div>
-
-        <div>
-          <label className="mb-1 block text-sm text-neutral-600 dark:text-neutral-300">Last X Games (blank = all)</label>
-          <input
-            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:placeholder-neutral-500"
-            value={lastX}
-            onChange={(e) => setLastX(e.target.value)}
-            placeholder="10"
-          />
-          <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">Leave blank to use all games.</div>
-        </div>
-
-        <div>
-          <label className="mb-1 block text-sm text-neutral-600 dark:text-neutral-300">Prop Line</label>
-          <input
-            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:placeholder-neutral-500"
-            value={propLine}
-            onChange={(e) => setPropLine(e.target.value)}
-            placeholder="22.5"
-          />
-        </div>
-
-        <div>
-          <label className="mb-1 block text-sm text-neutral-600 dark:text-neutral-300">Odds (American)</label>
-          <input
-            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
-            value={odds}
-            onChange={(e) => setOdds(e.target.value)}
-            placeholder="-110"
-          />
-          <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">Used for Break-even% and EV.</div>
-        </div>
-
-        <div>
-          <label className="mb-1 block text-sm text-neutral-600 dark:text-neutral-300">Min Minutes</label>
-          <input
-            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:placeholder-neutral-500"
-            value={minMinutes}
-            onChange={(e) => setMinMinutes(e.target.value)}
-            placeholder="24"
-          />
-        </div>
-
-        <div>
-          <label className="mb-1 block text-sm text-neutral-600 dark:text-neutral-300">Home/Away</label>
-          <select
-            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
-            value={homeAway}
-            onChange={(e) => setHomeAway(e.target.value as any)}
-          >
-            <option>Any</option>
-            <option value="H">H</option>
-            <option value="A">A</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="mb-1 block text-sm text-neutral-600 dark:text-neutral-300">Opponent</label>
-          <select
-            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
-            value={opponent}
-            onChange={(e) => setOpponent(e.target.value)}
-          >
-            <option>Any</option>
-            {[
-              'ATL','BOS','BKN','CHA','CHI','CLE','DAL','DEN','DET','GSW','HOU','IND','LAC','LAL','MEM','MIA','MIL','MIN','NOP','NYK','OKC','ORL','PHI','PHX','POR','SAC','SAS','TOR','UTA','WAS',
-            ].map((t) => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="mb-1 block text-sm text-neutral-600 dark:text-neutral-300">Start Date</label>
-          <input
-            type="date"
-            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-          />
-        </div>
-
-        <div>
-          <label className="mb-1 block text-sm text-neutral-600 dark:text-neutral-300">End Date</label>
-          <input
-            type="date"
-            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-900 focus:outline-none focus:ring-2 focus:ring-amber-400 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-          />
-        </div>
-
-        <div className="col-span-1 flex items-end gap-4 md:col-span-3">
-          <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
-            <input type="checkbox" checked={postseason} onChange={(e) => setPostseason(e.target.checked)} />
-            Postseason
-          </label>
-          <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-300">
-            <input type="checkbox" checked={includeZero} onChange={(e) => setIncludeZero(e.target.checked)} />
-            Include 0-min games
-          </label>
-          <div className="ml-auto flex-1">
-            <div className="mb-1 text-xs text-neutral-500 dark:text-neutral-400">
-              Recency weight <span className="font-medium">{recency}%</span>{' '}
-              <span className="opacity-75">= equal, higher = newer count more</span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={1}
-              value={recency}
-              onChange={(e) => setRecency(Number(e.target.value))}
-              className="w-full accent-amber-500"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Actions */}
-      <div className="mb-4 flex items-center gap-3">
-        <button
-          onClick={fetchGameLogs}
-          disabled={busy || !resolvedPlayerId()}
-          className="rounded-md bg-amber-500 px-4 py-2 font-medium text-white hover:bg-amber-600 disabled:opacity-60"
-          title={!resolvedPlayerId() ? 'Type a player and select from the list' : 'Fetch game logs'}
-        >
-          {busy ? 'Fetching…' : 'Fetch Game Logs'}
-        </button>
-
-        <SaveViewButton defaultName={defaultViewName} params={viewParams} />
-
-        <div className="text-sm text-neutral-500 dark:text-neutral-400">
-          Games: {games.length} • Stat: {stat}
-        </div>
-        {err && (
-          <span className="rounded-md bg-red-100 px-2 py-1 text-sm text-red-700 dark:bg-red-400/15 dark:text-red-300">
-            {err}
-          </span>
-        )}
-      </div>
-
-      {/* KPI grid */}
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-        <KpiCard title="SEASON AVG" value={kpis.seasonAvg} line={propLine} blurb={KPI_BLURBS['SEASON AVG']} />
-        <KpiCard title="HOME AVG" value={kpis.homeAvg} line={propLine} blurb={KPI_BLURBS['HOME AVG']} />
-        <KpiCard title="AWAY AVG" value={kpis.awayAvg} line={propLine} blurb={KPI_BLURBS['AWAY AVG']} />
-        <ConfidenceCard ev100={ev100} sample={games.length} enabled={canPrice} />
-
-        <KpiCard title="WEIGHTED AVG" value={kpis.weighted} line={propLine} blurb={KPI_BLURBS['WEIGHTED AVG']} />
-        <KpiCard title="LAST 3 AVG" value={kpis.last3} line={propLine} blurb={KPI_BLURBS['LAST 3 AVG']} />
-        <KpiCard title="LAST 5 AVG" value={kpis.last5} line={propLine} blurb={KPI_BLURBS['LAST 5 AVG']} />
-        <KpiCard
-          title="GAMES / DISTRIB"
-          value={kpis.gamesCount}
-          blurb={KPI_BLURBS['GAMES / DISTRIB']}
-          foot={`Games: ${kpis.gamesCount}\nMin: ${kpis.min.toFixed(1)}  Med: ${kpis.med.toFixed(1)}  Max: ${kpis.max.toFixed(1)}`}
-          pureCount
-        />
-
-        <KpiCard title="HIT RATE" value={hitRate} pct line={propLine} blurb={KPI_BLURBS['HIT RATE']} />
-        <KpiCard title="BREAK-EVEN %" value={breakEvenPct} pct blurb={KPI_BLURBS['BREAK-EVEN %']} />
-        <KpiCard title="PROFIT IF WIN ($100)" value={americanToWinPayout(Number(odds || NaN))} money blurb={KPI_BLURBS['PROFIT IF WIN ($100)']} />
-        <KpiCard title="EV / $100" value={ev100} money blurb={KPI_BLURBS['EV / $100']} highlightEV disabled={!canPrice} />
-      </div>
-
-      {/* Table */}
-      <div className="mt-6 overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-700">
-        <table className="min-w-full text-sm">
-          <thead className="bg-neutral-50 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
-            <tr>
-              {[
-                'Date', 'Opp', 'H/A', 'Min', 'Pts', 'Reb', 'Ast', '3PTM',
-                'Blk', 'Stl', 'TO', 'PRA', 'PR', 'PA', 'RA', 'Stocks',
-              ].map((h) => (
-                <th key={h} className="px-3 py-2 text-left font-medium">{h}</th>
+          {/* Stat */}
+          <div>
+            <label className="mb-1 block text-xs text-neutral-400">Stat</label>
+            <select
+              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              value={statKey}
+              onChange={(e) => setStatKey(e.target.value as StatKey)}
+            >
+              {STAT_OPTIONS.map((s) => (
+                <option key={s.key} value={s.key}>{s.label}</option>
               ))}
+            </select>
+          </div>
+
+          {/* Last X */}
+          <div>
+            <label className="mb-1 block text-xs text-neutral-400">Last X Games (blank = all)</label>
+            <input
+              inputMode="numeric"
+              placeholder="All"
+              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              value={lastX}
+              onChange={(e) => setLastX(e.target.value.replace(/[^0-9]/g, ""))}
+            />
+          </div>
+
+          {/* Min Minutes */}
+          <div>
+            <label className="mb-1 block text-xs text-neutral-400">Min Minutes</label>
+            <input
+              inputMode="numeric"
+              placeholder="e.g., 24"
+              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              value={minMinutes}
+              onChange={(e) => setMinMinutes(e.target.value.replace(/[^0-9]/g, ""))}
+            />
+          </div>
+
+          {/* H/A */}
+          <div>
+            <label className="mb-1 block text-xs text-neutral-400">Home/Away</label>
+            <select
+              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              value={homeAway}
+              onChange={(e) => setHomeAway(e.target.value as "" | "H" | "A")}
+            >
+              <option value="">Any</option>
+              <option value="H">Home</option>
+              <option value="A">Away</option>
+            </select>
+          </div>
+
+          {/* Opp */}
+          <div>
+            <label className="mb-1 block text-xs text-neutral-400">Opponent (abbr)</label>
+            <input
+              placeholder="e.g., BOS"
+              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 uppercase"
+              value={opp}
+              onChange={(e) => setOpp(e.target.value.toUpperCase().slice(0, 3))}
+            />
+          </div>
+
+          {/* Rest */}
+          <div>
+            <label className="mb-1 block text-xs text-neutral-400">Rest</label>
+            <select
+              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              value={rest}
+              onChange={(e) => setRest(e.target.value as "" | "0" | "1" | "2" | "3+")}
+            >
+              {REST_OPTIONS.map(r => (
+                <option key={r.value} value={r.value}>{r.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Prop line */}
+          <div>
+            <label className="mb-1 block text-xs text-neutral-400">Prop Line</label>
+            <input
+              inputMode="decimal"
+              placeholder="e.g., 26.5"
+              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              value={propLine}
+              onChange={(e) => setPropLine(e.target.value.replace(/[^0-9.\-]/g, ""))}
+            />
+          </div>
+
+          {/* Odds */}
+          <div>
+            <label className="mb-1 block text-xs text-neutral-400">Odds (American)</label>
+            <input
+              inputMode="numeric"
+              placeholder='e.g., "-115"'
+              className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2"
+              value={odds}
+              onChange={(e) => setOdds(e.target.value.replace(/[^0-9\-]/g, ""))}
+            />
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <button
+            onClick={fetchLogs}
+            disabled={!playerId || !seasonNum || loading}
+            className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-black disabled:opacity-50"
+          >
+            {loading ? "Loading…" : "See Stats"}
+          </button>
+
+          <button
+            onClick={reset}
+            className="rounded-lg border border-neutral-800 px-3 py-2 text-sm hover:bg-neutral-900"
+          >
+            Reset
+          </button>
+
+          <SaveViewButton
+            params={{
+              playerId,
+              playerName,
+              season,
+              stat: statKey,
+              lastX: lastX.trim() === "" ? null : Number(lastX),
+              min: minMinutes.trim() === "" ? null : Number(minMinutes),
+              ha: homeAway || null,
+              opp: opp || null,
+              rest: rest || null,
+              propLine: propLine.trim() === "" ? null : Number(propLine),
+              odds: odds.trim() === "" ? null : Number(odds),
+            }}
+          />
+
+          <button
+            onClick={onExportCSV}
+            className="rounded-lg border border-neutral-800 px-3 py-2 text-sm hover:bg-neutral-900"
+          >
+            Export CSV
+          </button>
+
+          {error ? <span className="ml-2 text-sm text-red-400">{error}</span> : null}
+        </div>
+      </div>
+
+      {/* KPIs */}
+      <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+        <Kpi title="SEASON AVG" value={seasonAvg.toFixed(2)} hint="Average of the chosen stat across the games shown." />
+        <Kpi title="HOME AVG" value={homeAvg.toFixed(2)} hint="Average when the player was at home." />
+        <Kpi title="AWAY AVG" value={awayAvg.toFixed(2)} hint="Average when the player was away." />
+        <Kpi title="WEIGHTED AVG" value={weightedAvg.toFixed(2)} hint="Recent games count a bit more than older games." />
+        <Kpi title="LAST 3 AVG" value={last3Avg.toFixed(2)} hint="Average over the most recent 3 games." />
+        <Kpi title="LAST 5 AVG" value={last5Avg.toFixed(2)} hint="Average over the most recent 5 games." />
+        <Kpi
+          title="GAMES / DISTRIB"
+          value={String(gamesCount)}
+          hint={`Games: ${gamesCount} • Min: ${minVal.toFixed(1)} • Med: ${medVal.toFixed(1)} • Max: ${maxVal.toFixed(1)}`}
+        />
+        <Kpi
+          title="EV / $100"
+          value={isFinite(evPer100) ? `$${evPer100.toFixed(2)}` : "—"}
+          hint="Expected profit on a $100 stake if you bet the OVER at your odds. Positive = good; negative = long-term loss."
+        />
+        <Kpi
+          title="CONFIDENCE"
+          value={isFinite(confidencePct) ? fmtPct(confidencePct, 0) : "—"}
+          hint="Probability your estimated edge is actually +EV. Higher is better; based on hit-rate vs. break-even and sample size."
+          extraClass={
+            !isFinite(confidencePct)
+              ? "border-neutral-800"
+              : confidencePct >= 0.6
+              ? "border-emerald-700 bg-emerald-900/20"
+              : confidencePct >= 0.4
+              ? "border-amber-700 bg-amber-900/20"
+              : "border-red-800 bg-red-900/20"
+          }
+        />
+      </div>
+
+      {/* TABLE */}
+      <div className="mt-8 overflow-x-auto rounded-xl border border-neutral-800">
+        <table className="min-w-[900px] w-full text-sm">
+          <thead className="bg-neutral-950 text-neutral-400">
+            <tr className="[&>th]:px-3 [&>th]:py-2 [&>th]:font-medium">
+              <th className="text-left">Date</th>
+              <th>Opp</th>
+              <th>H/A</th>
+              <th>Min</th>
+              <th>Pts</th>
+              <th>Reb</th>
+              <th>Ast</th>
+              <th>3PTM</th>
+              <th>Blk</th>
+              <th>Stl</th>
+              <th>TO</th>
+              <th>PRA</th>
+              <th>PR</th>
+              <th>PA</th>
+              <th>RA</th>
+              <th>Stocks</th>
             </tr>
           </thead>
           <tbody>
-            {games.map((g) => {
-              const threes =
-                n((g as any).fg3m) ??
-                n((g as any)['3PTM']) ??
-                n((g as any)['3pm']) ??
-                n((g as any).tpm);
-              const P = n(g.pts), R = n(g.reb), A = n(g.ast);
-              return (
-                <tr key={`${g.date}-${g.opp}-${g.team}-${P}-${R}-${A}`} className="odd:bg-white even:bg-neutral-50 dark:odd:bg-neutral-900 dark:even:bg-neutral-900/60">
-                  <td className="px-3 py-2">{g.date?.slice(0, 10) ?? ''}</td>
-                  <td className="px-3 py-2">{g.opp ?? ''}</td>
-                  <td className="px-3 py-2">{g.ha ?? ''}</td>
-                  <td className="px-3 py-2">{typeof g.min === 'string' ? g.min : n(g.min)}</td>
-                  <td className="px-3 py-2">{P}</td>
-                  <td className="px-3 py-2">{R}</td>
-                  <td className="px-3 py-2">{A}</td>
-                  <td className="px-3 py-2">{threes}</td>
-                  <td className="px-3 py-2">{n(g.blk)}</td>
-                  <td className="px-3 py-2">{n(g.stl)}</td>
-                  <td className="px-3 py-2">{n((g as any).tov ?? (g as any).turnover)}</td>
-                  <td className="px-3 py-2">{P + R + A}</td>
-                  <td className="px-3 py-2">{P + R}</td>
-                  <td className="px-3 py-2">{P + A}</td>
-                  <td className="px-3 py-2">{R + A}</td>
-                  <td className="px-3 py-2">{n(g.stl) + n(g.blk)}</td>
-                </tr>
-              );
-            })}
-
-            {!games.length && (
+            {cleanLogs.length === 0 ? (
               <tr>
-                <td className="px-3 py-6 text-center text-neutral-500 dark:text-neutral-400" colSpan={16}>
+                <td colSpan={16} className="px-3 py-8 text-center text-neutral-500">
                   No games loaded yet.
                 </td>
               </tr>
+            ) : (
+              cleanLogs.map((r, i) => {
+                const oppAbbr =
+                  typeof r.opp === "string" ? r.opp :
+                  typeof r.opp === "number" ? (TEAM_ID_TO_ABBR[r.opp] || String(r.opp)) : "";
+                const pts = r.pts ?? 0, reb = r.reb ?? 0, ast = r.ast ?? 0, stl = r.stl ?? 0, blk = r.blk ?? 0, tov = r.to ?? 0;
+                return (
+                  <tr key={`${r.date}-${i}`} className="border-t border-neutral-900 hover:bg-neutral-950">
+                    <td className="px-3 py-2 text-neutral-300">{r.date}</td>
+                    <td className="px-3 py-2 text-center">{oppAbbr}</td>
+                    <td className="px-3 py-2 text-center">{r.ha ?? ""}</td>
+                    <td className="px-3 py-2 text-center">{r.min ?? 0}</td>
+                    <td className="px-3 py-2 text-center">{pts}</td>
+                    <td className="px-3 py-2 text-center">{reb}</td>
+                    <td className="px-3 py-2 text-center">{ast}</td>
+                    <td className="px-3 py-2 text-center">{r["3ptm"] ?? "-"}</td>
+                    <td className="px-3 py-2 text-center">{blk}</td>
+                    <td className="px-3 py-2 text-center">{stl}</td>
+                    <td className="px-3 py-2 text-center">{tov}</td>
+                    <td className="px-3 py-2 text-center">{pts + reb + ast}</td>
+                    <td className="px-3 py-2 text-center">{pts + reb}</td>
+                    <td className="px-3 py-2 text-center">{pts + ast}</td>
+                    <td className="px-3 py-2 text-center">{reb + ast}</td>
+                    <td className="px-3 py-2 text-center">{stl + blk}</td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
       </div>
-    </main>
-  );
-}
-
-/* ------------------------------- Cards ------------------------------- */
-
-function KpiCard({
-  title,
-  value,
-  line,
-  blurb,
-  pct = false,
-  money = false,
-  highlightEV = false,
-  pureCount = false,
-  foot,
-  disabled = false,
-}: {
-  title: string;
-  value: number;
-  line?: string;
-  blurb?: string;
-  pct?: boolean;
-  money?: boolean;
-  highlightEV?: boolean;
-  pureCount?: boolean;
-  foot?: string;
-  disabled?: boolean;
-}) {
-  const prop = line ? parseFloat(line) : undefined;
-
-  const display = disabled
-    ? '—'
-    : pureCount
-      ? String(value)
-      : pct
-        ? `${value.toFixed(1)}%`
-        : money
-          ? (value >= 0 ? `$${value.toFixed(2)}` : `-$${Math.abs(value).toFixed(2)}`)
-          : value.toFixed(2);
-
-  const showDiff = Number.isFinite(prop) && !pureCount && !disabled;
-  const diff = showDiff ? (value - (prop as number)) : null;
-
-  const barStyle = disabled
-    ? 'bg-neutral-300 dark:bg-neutral-700'
-    : highlightEV
-      ? value >= 0 ? 'bg-emerald-500' : 'bg-rose-500'
-      : 'bg-amber-500';
-
-  return (
-    <div className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-900">
-      <div className="text-xs tracking-wide text-neutral-500 dark:text-neutral-400">{title}</div>
-      <div className="mt-2 text-3xl font-semibold tabular-nums">{display}</div>
-
-      {showDiff && diff !== null && (
-        <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-          {(diff >= 0 ? '+' : '') + (diff).toFixed(2)} vs {prop}
-        </div>
-      )}
-
-      {blurb && (
-        <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-          {disabled ? 'Add Prop Line + Odds to see this.' : blurb}
-        </div>
-      )}
-
-      <div className="mt-3 h-1 w-full rounded-full bg-neutral-200 dark:bg-neutral-700">
-        <div className={`h-1 w-2/3 rounded-full ${barStyle}`} />
-      </div>
-
-      {foot && !disabled && (
-        <div className="mt-2 whitespace-pre-line text-xs text-neutral-500 dark:text-neutral-400">{foot}</div>
-      )}
     </div>
   );
 }
 
-function ConfidenceCard({ ev100, sample, enabled }: { ev100: number; sample: number; enabled: boolean }) {
-  const neutral = { label: '—', color: 'bg-neutral-300', text: 'text-neutral-800 dark:text-neutral-100' };
-  const c = enabled ? confidenceFromEV(ev100, sample) : neutral;
-
+// Simple KPI card
+function Kpi({ title, value, hint, extraClass }: { title: string; value: string; hint?: string; extraClass?: string }) {
   return (
-    <div className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-900">
-      <div className="text-xs tracking-wide text-neutral-500 dark:text-neutral-400">CONFIDENCE</div>
-      <div className={`mt-2 inline-flex items-center gap-2 rounded-full px-3 py-1 ${c.color} ${c.text}`}>
-        <span className="text-sm font-semibold">{c.label}</span>
-      </div>
-      <div className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
-        {enabled ? 'Based on EV per $100 and sample size.' : 'Add Prop Line + Odds to see this.'}
-      </div>
+    <div className={`rounded-xl border ${extraClass || "border-neutral-800"} p-4`}>
+      <div className="text-xs uppercase tracking-wide text-neutral-400">{title}</div>
+      <div className="mt-1 text-3xl font-semibold">{value}</div>
+      {hint ? <div className="mt-1 text-xs text-neutral-500">{hint}</div> : null}
     </div>
   );
 }
