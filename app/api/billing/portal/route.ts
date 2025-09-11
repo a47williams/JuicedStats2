@@ -1,43 +1,36 @@
-// app/api/billing/portal/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { stripe, APP_URL } from "@/lib/stripe";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { auth } from "@/auth";
 
-// NOTE: Stripe requires you to configure the Customer Portal in Dashboard (test mode)
-// Dashboard → Settings → Billing → Customer portal → Save (creates default configuration)
+// Share one handler for both GET and POST to keep callers working
+export async function GET() {
+  return handler();
+}
+export async function POST() {
+  return handler();
+}
 
-export const dynamic = "force-dynamic";
+async function handler() {
+  const session = await auth();
+  const email = session?.user?.email;
 
-export async function POST(_req: NextRequest) {
-  try {
-    const session = await getServerSession(authOptions);
-    const email = session?.user?.email;
-
-    if (!email) {
-      return NextResponse.json({ error: "Not signed in" }, { status: 401 });
-    }
-
-    // Create/find a customer by email (simple approach for MVP)
-    const customers = await stripe.customers.list({ email, limit: 1 });
-    const customer =
-      customers.data[0] ??
-      (await stripe.customers.create({
-        email,
-        metadata: { appUserId: session?.user?.id || "" },
-      }));
-
-    const portalSession = await stripe.billingPortal.sessions.create({
-      customer: customer.id,
-      return_url: `${APP_URL}/account`,
-    });
-
-    return NextResponse.json({ url: portalSession.url }, { status: 200 });
-  } catch (err: any) {
-    console.error("[portal] error:", err);
-    return NextResponse.json(
-      { error: String(err?.message || err) },
-      { status: 500 }
-    );
+  if (!email) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // Find or create the Stripe Customer for this user
+  const existing = await stripe.customers.list({ email, limit: 1 });
+  const customerId =
+    existing.data[0]?.id ??
+    (await stripe.customers.create({
+      email,
+      name: session.user?.name ?? undefined,
+    })).id;
+
+  const portal = await stripe.billingPortal.sessions.create({
+    customer: customerId,
+    return_url: `${APP_URL}/account`,
+  });
+
+  return NextResponse.json({ url: portal.url }, { status: 200 });
 }
