@@ -1,20 +1,40 @@
-// auth.ts (or /lib/auth.ts if that’s your path)
+// auth.ts (App Router, NextAuth v5)
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import { PrismaAdapter } from "@auth/prisma-adapter";
-import { prisma } from "@/lib/prisma";
+import { PrismaClient } from "@prisma/client";
+
+const prisma = new PrismaClient();
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  // When deploying behind Vercel/proxies, this must be on
+  trustHost: true,
+
+  // Prisma adapter + your DB
   adapter: PrismaAdapter(prisma),
-  secret: process.env.AUTH_SECRET,            // <— explicit v5 secret
-  trustHost: true,                            // <— important on Vercel
+
+  // v5 defaults to database sessions if adapter exists; either is fine.
+  // session: { strategy: "database" },
+
   providers: [
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-      allowDangerousEmailAccountLinking: true,
     }),
   ],
-  session: { strategy: "database" },          // you’re using Prisma sessions
-  // Anything else you had (callbacks, events, etc.)
+
+  // Optional: tighten redirects to your site only
+  callbacks: {
+    async redirect({ url, baseUrl }) {
+      try {
+        const allowed = new URL(process.env.AUTH_URL ?? process.env.NEXTAUTH_URL ?? baseUrl);
+        const next = new URL(url, baseUrl);
+        // only allow same-origin redirects
+        if (next.origin === allowed.origin) return next.toString();
+        return allowed.toString();
+      } catch {
+        return baseUrl;
+      }
+    },
+  },
 });
