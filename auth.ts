@@ -1,40 +1,44 @@
-// auth.ts (App Router, NextAuth v5)
+// auth.ts
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import { PrismaAdapter } from "@auth/prisma-adapter";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 
-const prisma = new PrismaClient();
-
+// Export everything NextAuth v5 gives us, including `handlers`
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  // When deploying behind Vercel/proxies, this must be on
-  trustHost: true,
-
-  // Prisma adapter + your DB
   adapter: PrismaAdapter(prisma),
-
-  // v5 defaults to database sessions if adapter exists; either is fine.
-  // session: { strategy: "database" },
-
+  session: { strategy: "jwt" },
+  trustHost: true,
   providers: [
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      allowDangerousEmailAccountLinking: true,
     }),
   ],
-
-  // Optional: tighten redirects to your site only
   callbacks: {
-    async redirect({ url, baseUrl }) {
-      try {
-        const allowed = new URL(process.env.AUTH_URL ?? process.env.NEXTAUTH_URL ?? baseUrl);
-        const next = new URL(url, baseUrl);
-        // only allow same-origin redirects
-        if (next.origin === allowed.origin) return next.toString();
-        return allowed.toString();
-      } catch {
-        return baseUrl;
+    async jwt({ token, user }) {
+      if (user) {
+        // carry custom fields to the token (our Prisma User includes these)
+        // @ts-ignore
+        token.uid = user.id;
+        // @ts-ignore
+        token.plan = (user as any).plan ?? "FREE";
+        // @ts-ignore
+        token.proUntil = (user as any).proUntil ?? null;
       }
+      return token;
+    },
+    async session({ session, token }) {
+      if (session.user && token) {
+        // @ts-ignore
+        session.user.id = (token as any).uid as string;
+        // @ts-ignore
+        session.user.plan = (token as any).plan ?? "FREE";
+        // @ts-ignore
+        session.user.proUntil = (token as any).proUntil ?? null;
+      }
+      return session;
     },
   },
 });
