@@ -1,79 +1,145 @@
-import { NextRequest, NextResponse } from "next/server";
+// app/api/game-logs/teammate-out/route.ts
+import { NextResponse } from "next/server";
 
-// Use the new host. Optional API key support.
-const BDL_BASE = process.env.BDL_BASE || "https://api.balldontlie.io/v1";
-const BDL_KEY = process.env.BDL_KEY || "";
-const AUTH = BDL_KEY ? (BDL_KEY.startsWith("Bearer ") ? BDL_KEY : `Bearer ${BDL_KEY}`) : "";
-const BDL_HEADERS: HeadersInit = AUTH ? { Authorization: AUTH } : {};
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
-function parseMinutes(minStr: string | null | undefined): number {
-  if (!minStr) return 0;
-  // "34:12" or "28" → minutes as float (approx)
-  if (minStr.includes(":")) {
-    const [m, s] = minStr.split(":").map((x) => Number(x) || 0);
-    return m + s / 60;
-  }
-  return Number(minStr) || 0;
+const API_BASE =
+  process.env.BDL_BASE ||
+  process.env.NEXT_PUBLIC_BDL_BASE ||
+  "https://api.balldontlie.io/v1";
+
+// Optional: if you have a BallDontLie API key, set BDL_API_KEY in Vercel env.
+const API_KEY =
+  process.env.BDL_API_KEY || process.env.NEXT_PUBLIC_BDL_API_KEY || "";
+
+function authHeaders(): HeadersInit {
+  const h: Record<string, string> = {};
+  if (API_KEY) h.Authorization = `Bearer ${API_KEY}`;
+  return h;
 }
 
-export async function POST(req: NextRequest) {
-  try {
-    const body = await req.json();
-    const teammateId = Number(body?.teammateId);
-    const season = Number(body?.season);
-    const maxMinutes = Number(body?.maxMinutes) || 0;
+type BdlStat = {
+  game?: { id: number; date: string };
+  min?: string | null; // "MM:SS" or null
+};
 
-    if (!teammateId || !season) {
-      return NextResponse.json({ ok: false, error: "Missing teammateId or season" }, { status: 400 });
+// "MM:SS" -> minutes as float
+function minutesStrToFloat(min?: string | null): number {
+  if (!min) return 0;
+  const [mm, ss] = String(min).split(":").map((x) => Number(x));
+  if (!isFinite(mm)) return 0;
+  return mm + (isFinite(ss) ? ss / 60 : 0);
+}
+
+async function fetchAllStats(qs: URLSearchParams) {
+  // Paginates /stats for given query
+  const out: BdlStat[] = [];
+  let page = 1;
+  // Guard Rails: hard cap pages to avoid abuse
+  const MAX_PAGES = 50;
+
+  while (page <= MAX_PAGES) {
+    qs.set("page", String(page));
+    const url = `${API_BASE}/stats?${qs.toString()}`;
+
+    const res = await fetch(url, { headers: authHeaders(), cache: "no-store" });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      throw new Error(`BDL ${res.status} for ${url}${txt ? ` — ${txt}` : ""}`);
     }
 
-    const outGameIds: number[] = [];
-    const outDates: string[] = [];
+    const j = await res.json();
+    const data: BdlStat[] = j?.data ?? [];
+    out.push(...data);
 
-    // Paginate through all stat lines for that teammate & season
-    let page = 1;
-    for (;;) {
-      const qs = new URLSearchParams();
-      qs.append("player_ids[]", String(teammateId));
-      qs.append("seasons[]", String(season));
-      qs.set("per_page", "100");
-      qs.set("page", String(page));
+    const nextPage = j?.meta?.next_page;
+    const totalPages = j?.meta?.total_pages;
+    const curr = j?.meta?.current_page ?? page;
 
-      const url = `${BDL_BASE}/stats?${qs.toString()}`;
-      const r = await fetch(url, { headers: BDL_HEADERS, cache: "no-store" });
+    if (!nextPage && (!totalPages || curr >= totalPages)) break;
+    page = nextPage || curr + 1;
+  }
 
-      if (!r.ok) {
-        const msg = await r.text().catch(() => "");
-        return NextResponse.json(
-          { ok: false, error: `BDL ${r.status} for ${url}${msg ? ` :: ${msg}` : ""}` },
-          { status: 502 }
-        );
-      }
+  return out;
+}
 
-      const j = await r.json();
-      const data: any[] = j?.data ?? [];
-      for (const s of data) {
-        const mins = parseMinutes(s?.min ?? s?.minutes);
-        if (mins <= maxMinutes) {
-          const gid = Number(s?.game?.id);
-          const date = String(s?.game?.date || "").slice(0, 10);
-          if (Number.isFinite(gid)) outGameIds.push(gid);
-          if (date) outDates.push(date);
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const playerId = Number(body?.playerId);
+    const teammateId = Number(body?.teammateId);
+    const season = Number(body?.season);
+    const maxMinutes = Math.max(0, Number(body?.maxMinutes ?? 1));
+
+    if (!playerId || !teammateId || !season) {
+      return NextResponse.json(
+        { ok: false, error: "Missing playerId, teammateId, or season." },
+        { status: 400 }
+      );
+    }
+
+    // 1) Get ALL teammate game stats for the season
+    const teamQs = new URLSearchParams();
+    teamQs.append("player_ids[]", String(teammateId));
+    teamQs.append("seasons[]", String(season));
+    teamQs.set("per_page", "100");
+
+    const teammateStats = await fetchAllStats(teamQs);
+
+    // 2) Games where teammate minutes <= threshold (including DNP/null)
+    const outGameIdsSet = new Set<number>();
+    for (const s of teammateStats) {
+      const gid = Number(s?.game?.id);
+      if (!gid) continue;
+      const m = minutesStrToFloat(s?.min);
+      if (m <= maxMinutes) outGameIdsSet.add(gid);
+    }
+
+    // If teammate never played this season (or every row is null), we may still have an empty set.
+    const outGameIds = Array.from(outGameIdsSet);
+
+    // 3) Map those gameIds to the target player's dates (so UI can intersect quickly)
+    let outDates: string[] = [];
+    if (outGameIds.length) {
+      const CHUNK = 90;
+      const dates: string[] = [];
+
+      for (let i = 0; i < outGameIds.length; i += CHUNK) {
+        const chunk = outGameIds.slice(i, i + CHUNK);
+
+        const qs = new URLSearchParams();
+        qs.append("player_ids[]", String(playerId));
+        for (const gid of chunk) qs.append("game_ids[]", String(gid));
+        qs.set("per_page", "100");
+
+        const url = `${API_BASE}/stats?${qs.toString()}`;
+        const res = await fetch(url, { headers: authHeaders(), cache: "no-store" });
+        if (!res.ok) {
+          // Don't hard fail here—return IDs at least.
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        const j = await res.json();
+        const data: BdlStat[] = j?.data ?? [];
+        for (const s of data) {
+          const d = String(s?.game?.date || "").slice(0, 10);
+          if (d) dates.push(d);
         }
       }
-
-      const meta = j?.meta;
-      const totalPages = Number(meta?.total_pages || meta?.totalPages || 1);
-      if (!data.length || page >= totalPages) break;
-      page++;
+      outDates = Array.from(new Set(dates));
     }
 
     return NextResponse.json({
       ok: true,
-      outGameIds: Array.from(new Set(outGameIds)),
-      outDates: Array.from(new Set(outDates)),
+      outGameIds,
+      outDates,
+      count: outGameIds.length,
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || "Unexpected error" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message || "Internal error" },
+      { status: 500 }
+    );
   }
 }

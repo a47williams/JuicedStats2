@@ -41,12 +41,18 @@ function wilsonUpperLower(pHat: number, n: number, z = 1.96) {
   const margin = (z * Math.sqrt((pHat * (1 - pHat)) / n + (z ** 2) / (4 * n ** 2))) / denom;
   return { lo: Math.max(0, center - margin), hi: Math.min(1, center + margin) };
 }
+// Normal CDF approx
 function normalCDF(x: number) {
   const t = 1 / (1 + 0.2316419 * Math.abs(x));
   const d = 0.3989422804014327 * Math.exp(-(x * x) / 2);
   const poly = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
   const p = 1 - d * poly;
   return x >= 0 ? p : 1 - p;
+}
+function formatDelta(x: number, digits = 2) {
+  if (!isFinite(x)) return "—";
+  const sign = x > 0 ? "+" : "";
+  return `${sign}${x.toFixed(digits)}`;
 }
 
 /* ================= Stat mapping ================= */
@@ -78,15 +84,10 @@ const REST_OPTIONS: { value: "" | "0" | "1" | "2" | "3+"; label: string }[] = [
 ];
 
 type LogRow = {
-  date: string;
+  date: string; // YYYY-MM-DD
   opp?: number | string;
   ha?: "H" | "A" | "";
   min?: number;
-  gameId?: number;
-  game_id?: number;
-  game?: { id?: number };
-  teammatePlayed?: boolean;
-  teammateMin?: number;
   pts?: number; reb?: number; ast?: number; stl?: number; blk?: number; to?: number; "3ptm"?: number;
 };
 
@@ -125,14 +126,14 @@ export default function HomePage() {
   const [teammateQuery, setTeammateQuery] = useState("");
   const [teammateId, setTeammateId] = useState<string | null>(null);
   const [teammateName, setTeammateName] = useState("");
-  const [teammateMaxMinutes, setTeammateMaxMinutes] = useState("0");
+  const [teammateMaxMinutes, setTeammateMaxMinutes] = useState("0"); // treat <= as OUT
 
   const [season, setSeason] = useState("2024-25");
   const seasonNum = Number(season.split("-")[0]) || undefined;
 
   const [statKey, setStatKey] = useState<StatKey>("pts");
-  const [lastX, setLastX] = useState("");
-  const [minMinutes, setMinMinutes] = useState("");
+  const [lastX, setLastX] = useState("");             // blank = all
+  const [minMinutes, setMinMinutes] = useState("");   // blank = none
   const [homeAway, setHomeAway] = useState<"" | "H" | "A">("");
   const [opp, setOpp] = useState("");
   const [rest, setRest] = useState<"" | "0" | "1" | "2" | "3+">("");
@@ -141,16 +142,13 @@ export default function HomePage() {
   const [odds, setOdds] = useState("");
 
   // data state
-  const [logs, setLogs] = useState<LogRow[]>([]);
+  const [logs, setLogs] = useState<LogRow[]>([]);                // possibly teammate-filtered
+  const [baselineLogs, setBaselineLogs] = useState<LogRow[]>([]); // same filters, no teammate constraint
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const onPlayerSelect = (p: { id: string | number; full_name?: string; name?: string } | null) => {
-    if (!p) {
-      setPlayerId(null);
-      setPlayerName("");
-      return;
-    }
+    if (!p) { setPlayerId(null); setPlayerName(""); return; }
     const nm = p.full_name || p.name || "";
     setPlayerId(String(p.id));
     setPlayerName(nm);
@@ -158,12 +156,7 @@ export default function HomePage() {
   };
 
   const onTeammateSelect = (p: { id: string | number; full_name?: string; name?: string } | null) => {
-    if (!p) {
-      setTeammateId(null);
-      setTeammateName("");
-      setTeammateQuery("");
-      return;
-    }
+    if (!p) { setTeammateId(null); setTeammateName(""); setTeammateQuery(""); return; }
     const nm = p.full_name || p.name || "";
     setTeammateId(String(p.id));
     setTeammateName(nm);
@@ -172,11 +165,13 @@ export default function HomePage() {
 
   const toISODate = (s: string) => (s || "").slice(0, 10);
 
+  // fetch logs (+ optional teammate-out filter)
   const fetchLogs = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       setLogs([]);
+      setBaselineLogs([]);
 
       if (!playerId || !seasonNum) {
         setError("Choose a player and season.");
@@ -201,7 +196,11 @@ export default function HomePage() {
         setLoading(false);
         return;
       }
-      let rows: LogRow[] = Array.isArray(j.logs) ? j.logs : [];
+
+      const originalRows: LogRow[] = Array.isArray(j.logs) ? j.logs : [];
+      setBaselineLogs(originalRows);
+
+      let rows: LogRow[] = originalRows;
 
       if (teammateId) {
         try {
@@ -216,64 +215,44 @@ export default function HomePage() {
             }),
           });
 
-          if (!r.ok) {
-            const txt = await r.text().catch(() => "");
-            throw new Error(txt || "Teammate filter endpoint error");
-          }
+          if (r.ok) {
+            const data = await r.json();
 
-          const data = await r.json();
+            let outDates: string[] = Array.isArray(data.outDates) ? data.outDates : [];
 
-          const outIds = new Set<number>(
-            Array.isArray(data.outGameIds) ? data.outGameIds.map((x: any) => Number(x)).filter(Number.isFinite) : []
-          );
-          let outDates = new Set<string>(
-            Array.isArray(data.outDates) ? data.outDates.map((d: any) => String(d).slice(0, 10)) : []
-          );
+            if (!outDates.length && Array.isArray(data.outGameIds) && data.outGameIds.length) {
+              const BDL = "https://www.balldontlie.io/api/v1";
+              const ids: number[] = data.outGameIds.slice();
+              const chunks: number[][] = [];
+              for (let i = 0; i < ids.length; i += 90) chunks.push(ids.slice(i, i + 90));
 
-          // Map IDs -> dates if needed
-          if (!outDates.size && outIds.size) {
-            const BDL_BASE = process.env.NEXT_PUBLIC_BDL_BASE || "https://api.balldontlie.io/v1";
-            const KEY = process.env.NEXT_PUBLIC_BDL_KEY || "";
-            const AUTH = KEY ? (KEY.startsWith("Bearer ") ? KEY : `Bearer ${KEY}`) : "";
-            const headers: HeadersInit = AUTH ? { Authorization: AUTH } : {};
-
-            const ids = Array.from(outIds);
-            const chunkSize = 90;
-            const mappedDates: string[] = [];
-
-            for (let i = 0; i < ids.length; i += chunkSize) {
-              const chunk = ids.slice(i, i + chunkSize);
-              const qs = new URLSearchParams();
-              qs.append("player_ids[]", String(playerId));
-              chunk.forEach((g) => qs.append("game_ids[]", String(g)));
-              qs.set("per_page", "100");
-              const rr = await fetch(`${BDL_BASE}/stats?${qs.toString()}`, { cache: "no-store", headers });
-              if (rr.ok) {
-                const jj = await rr.json();
-                for (const s of (jj?.data ?? []) as any[]) {
-                  const d = toISODate(s?.game?.date || "");
-                  if (d) mappedDates.push(d);
+              const dates: string[] = [];
+              for (const chunk of chunks) {
+                const qs = new URLSearchParams();
+                qs.append("player_ids[]", String(playerId));
+                for (const g of chunk) qs.append("game_ids[]", String(g));
+                qs.set("per_page", "100");
+                const rr = await fetch(`${BDL}/stats?${qs.toString()}`, { cache: "no-store" });
+                if (rr.ok) {
+                  const jj = await rr.json();
+                  for (const s of (jj?.data ?? []) as any[]) {
+                    const d = toISODate(s?.game?.date || "");
+                    if (d) dates.push(d);
+                  }
                 }
               }
+              outDates = Array.from(new Set(dates));
             }
-            outDates = new Set(mappedDates);
-          }
 
-          if (outIds.size || outDates.size) {
-            rows = rows.filter((rw) => {
-              const gid = (rw.gameId ?? rw.game_id ?? rw.game?.id) as number | undefined;
-              if (gid != null && outIds.size) return outIds.has(Number(gid));
-              if (outDates.size) return outDates.has(rw.date);
-              return true;
-            });
+            if (outDates.length) {
+              const keep = new Set(outDates);
+              rows = rows.filter(rw => keep.has(rw.date));
+            }
           } else {
-            rows = rows.filter((rw) => {
-              const played = rw.teammatePlayed ?? ((rw.teammateMin ?? 0) > 0);
-              return played === false;
-            });
+            setError(`Could not apply teammate filter: ${await r.text()}`);
           }
-        } catch (err: any) {
-          setError(`Could not apply teammate filter: ${err?.message || ""}`);
+        } catch {
+          // silently fall back to unfiltered rows
         }
       }
 
@@ -300,20 +279,31 @@ export default function HomePage() {
     setRest("");
     setPropLine("");
     setOdds("");
-    setLogs([]); setError(null);
+    setLogs([]); setBaselineLogs([]); setError(null);
   };
 
   /* ================= Derived lists & metrics ================= */
 
-  const cleanLogs = useMemo(() => {
-    const rows = (logs || []).filter(r => (r.min ?? 0) > 0);
+  const cleanLogs = useMemo<LogRow[]>(() => {
+    const rows: LogRow[] = (logs || []).filter((r: LogRow) => (r.min ?? 0) > 0);
     rows.sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : 0));
     return rows;
   }, [logs]);
 
+  const cleanBaselineLogs = useMemo<LogRow[]>(() => {
+    const rows: LogRow[] = (baselineLogs || []).filter((r: LogRow) => (r.min ?? 0) > 0);
+    rows.sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : 0));
+    return rows;
+  }, [baselineLogs]);
+
+  // series for current stat
   const statSeries = useMemo(
     () => cleanLogs.map(r => computeStat(r, statKey)),
     [cleanLogs, statKey]
+  );
+  const baselineStatSeries = useMemo(
+    () => cleanBaselineLogs.map(r => computeStat(r, statKey)),
+    [cleanBaselineLogs, statKey]
   );
 
   const gamesCount = statSeries.length;
@@ -323,7 +313,7 @@ export default function HomePage() {
   const weightedAvg = useMemo(() => {
     if (!statSeries.length) return 0;
     const n = statSeries.length;
-    const weights = statSeries.map((_, i) => 0.5 + (1.0 * (n - i)) / n);
+    const weights = statSeries.map((_, i) => 0.5 + (1.0 * (n - i)) / n); // sorted desc
     const totalW = weights.reduce((a, b) => a + b, 0);
     return statSeries.reduce((sum, v, i) => sum + v * weights[i], 0) / totalW;
   }, [statSeries]);
@@ -334,7 +324,21 @@ export default function HomePage() {
   const maxVal = useMemo(() => (statSeries.length ? Math.max(...statSeries) : 0), [statSeries]);
   const medVal = useMemo(() => median(statSeries), [statSeries]);
 
-  // EV & confidence
+  // === Dynamic Δs for the selected stat + MIN ===
+  const outStatAvg = useMemo(() => mean(cleanLogs.map(r => computeStat(r, statKey))), [cleanLogs, statKey]);
+  const baseStatAvg = useMemo(() => mean(cleanBaselineLogs.map(r => computeStat(r, statKey))), [cleanBaselineLogs, statKey]);
+  const deltaStat = outStatAvg - baseStatAvg;
+
+  const outMinAvg = useMemo(() => mean(cleanLogs.map(r => r.min ?? 0)), [cleanLogs]);
+  const baseMinAvg = useMemo(() => mean(cleanBaselineLogs.map(r => r.min ?? 0)), [cleanBaselineLogs]);
+  const deltaMin = outMinAvg - baseMinAvg;
+
+  const statLabel = useMemo(
+    () => STAT_OPTIONS.find(s => s.key === statKey)?.label ?? statKey.toUpperCase(),
+    [statKey]
+  );
+
+  // EV & confidence (based on currently displayed games = respects teammate filter)
   const numericLine = Number(propLine);
   const numericOdds = Number(odds);
   const hasEdgeInputs = isFinite(numericLine) && isFinite(numericOdds) && propLine.trim() !== "" && odds.trim() !== "";
@@ -356,7 +360,7 @@ export default function HomePage() {
   const confidencePct = useMemo(() => {
     if (!hasEdgeInputs || !gamesCount) return NaN;
     const pHat = clamp01(pOver);
-    const { lo, hi } = wilsonUpperLower(pHat, gamesCount, 1.64);
+    const { lo, hi } = wilsonUpperLower(pHat, gamesCount, 1.64); // ~90%
     const center = (lo + hi) / 2;
     const se = Math.max(1e-6, Math.sqrt(center * (1 - center) / gamesCount));
     const z = (center - beProb) / se;
@@ -378,7 +382,7 @@ export default function HomePage() {
   const onExportCSV = () => {
     if (!cleanLogs.length) return;
     const cols = ["Date","Opp","H/A","Min","Pts","Reb","Ast","3PTM","Blk","Stl","TO","PRA","PR","PA","RA","Stocks"];
-    const rows = cleanLogs.map(r => {
+    const rows = cleanLogs.map((r: LogRow) => {
       const oppAbbr =
         typeof r.opp === "string" ? r.opp :
         typeof r.opp === "number" ? (TEAM_ID_TO_ABBR[r.opp] || String(r.opp)) : "";
@@ -396,6 +400,33 @@ export default function HomePage() {
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  /* ============ lightweight analytics (no-op if /api/track not present) ============ */
+  function track(event: string, props?: Record<string, any>) {
+    try {
+      const body = JSON.stringify({ event, props, ts: Date.now() });
+      if ("sendBeacon" in navigator) {
+        (navigator as any).sendBeacon?.("/api/track", body);
+      } else {
+        fetch("/api/track", { method: "POST", headers: { "Content-Type": "application/json" }, body });
+      }
+    } catch {}
+  }
+
+  const showDeltaStrip =
+    !!teammateId &&
+    cleanLogs.length > 0 &&
+    cleanBaselineLogs.length > 0;
+
+  if (showDeltaStrip) {
+    track("teammate_out_tiles_viewed", {
+      playerId,
+      teammateId,
+      thresholdMin: Number(teammateMaxMinutes) || 0,
+      n: cleanLogs.length,
+      stat: statKey,
+    });
+  }
 
   /* ================= UI ================= */
 
@@ -581,7 +612,7 @@ export default function HomePage() {
             {loading ? "Loading…" : "See Stats"}
           </button>
 
-          <button
+        <button
             onClick={reset}
             className="rounded-lg border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-50
                        dark:border-neutral-800 dark:hover:bg-neutral-900"
@@ -616,6 +647,26 @@ export default function HomePage() {
           {error ? <span className="ml-2 text-sm text-red-600 dark:text-red-400">{error}</span> : null}
         </div>
       </div>
+
+      {/* Δ Strip */}
+      {showDeltaStrip ? (
+        <div
+          className="mt-4 rounded-xl border border-neutral-200 bg-white p-3 text-sm dark:border-neutral-800 dark:bg-neutral-900"
+          title={`Out = ${teammateName} minutes ≤ ${Number(teammateMaxMinutes) || 0}. n = ${cleanLogs.length}.`}
+        >
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-neutral-600 dark:text-neutral-400">Without <b>{teammateName}</b>:</span>
+            <DeltaPill label={statLabel} value={formatDelta(deltaStat)} />
+            <DeltaPill label="MIN" value={formatDelta(deltaMin)} />
+            <span className="ml-1 text-neutral-500 dark:text-neutral-400">• n={cleanLogs.length}</span>
+            {cleanLogs.length < 12 ? (
+              <span className="rounded-md border border-amber-500 bg-amber-50 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                Unstable sample
+              </span>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       {/* KPIs */}
       <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
@@ -674,7 +725,7 @@ export default function HomePage() {
                 </td>
               </tr>
             ) : (
-              cleanLogs.map((r, i) => {
+              cleanLogs.map((r: LogRow, i: number) => {
                 const oppAbbr =
                   typeof r.opp === "string" ? r.opp :
                   typeof r.opp === "number" ? (TEAM_ID_TO_ABBR[r.opp] || String(r.opp)) : "";
@@ -708,7 +759,7 @@ export default function HomePage() {
   );
 }
 
-/* ================= Simple KPI card ================= */
+/* ================= Simple KPI/Delta components ================= */
 
 function Kpi({ title, value, hint, extraClass }: { title: string; value: string; hint?: string; extraClass?: string }) {
   return (
@@ -717,5 +768,14 @@ function Kpi({ title, value, hint, extraClass }: { title: string; value: string;
       <div className="mt-1 text-3xl font-semibold text-neutral-900 dark:text-neutral-100">{value}</div>
       {hint ? <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-500">{hint}</div> : null}
     </div>
+  );
+}
+
+function DeltaPill({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-lg border border-neutral-300 bg-neutral-50 px-2 py-1 text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+      <span className="font-medium">{label}</span>
+      <span>{value}</span>
+    </span>
   );
 }
