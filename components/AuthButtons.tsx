@@ -1,15 +1,21 @@
-// components/AuthButtons.tsx
 "use client";
+
+import Link from "next/link";
 import { useSession, signIn, signOut } from "next-auth/react";
 
 export default function AuthButtons() {
-  const { status } = useSession();
+  const { data: session, status } = useSession();
 
-  if (status !== "authenticated") {
+  if (status === "loading") {
+    return <div className="h-9 w-20 rounded-lg bg-neutral-200 dark:bg-neutral-800 animate-pulse" />;
+  }
+
+  if (!session) {
     return (
       <button
-        onClick={() => signIn("google", { callbackUrl: "/account" })}
-        className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-500"
+        onClick={() => signIn()}
+        className="rounded-lg border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-50
+                   dark:border-neutral-700 dark:hover:bg-neutral-900"
       >
         Sign in
       </button>
@@ -17,11 +23,22 @@ export default function AuthButtons() {
   }
 
   return (
-    <button
-      onClick={() => signOut({ callbackUrl: "/" })}
-      className="rounded-lg border border-neutral-800 px-3 py-1.5 text-sm hover:bg-neutral-900"
-    >
-      Sign out
-    </button>
+    <div className="flex items-center gap-2">
+      <Link
+        href="/account"
+        className="rounded-lg border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-50
+                   dark:border-neutral-700 dark:hover:bg-neutral-900"
+      >
+        Account
+      </Link>
+
+      <button
+        onClick={() => signOut({ callbackUrl: "/" })}
+        className="rounded-lg bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-800
+                   dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+      >
+        Sign out
+      </button>
+    </div>
   );
 }
