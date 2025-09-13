@@ -4,7 +4,8 @@ import { useCallback, useMemo, useState } from "react";
 import PlayerSearchBox from "@/components/PlayerSearchBox";
 import SaveViewButton from "@/components/SaveViewButton";
 
-// ====== Utilities ======
+/* ================= Utilities ================= */
+
 const TEAM_ID_TO_ABBR: Record<number, string> = {
   1: "ATL", 2: "BOS", 3: "BKN", 4: "CHA", 5: "CHI", 6: "CLE", 7: "DAL", 8: "DEN",
   9: "DET", 10: "GSW", 11: "HOU", 12: "IND", 13: "LAC", 14: "LAL", 15: "MEM",
@@ -13,29 +14,20 @@ const TEAM_ID_TO_ABBR: Record<number, string> = {
   30: "WAS",
 };
 
-// American odds → break-even probability
 function breakevenProb(american: number): number {
   if (!isFinite(american) || american === 0) return NaN;
   return american > 0 ? 100 / (american + 100) : Math.abs(american) / (Math.abs(american) + 100);
 }
-
-// profit (not payout) for a $100 stake
 function profitPer100(american: number): number {
   if (!isFinite(american) || american === 0) return 0;
   return american > 0 ? american : 100 * (100 / Math.abs(american));
 }
-
-function clamp01(x: number) {
-  return Math.max(0, Math.min(1, x));
-}
+function clamp01(x: number) { return Math.max(0, Math.min(1, x)); }
 function fmtPct(x: number | null | undefined, digits = 0) {
   if (x == null || !isFinite(x)) return "—";
   return `${(100 * x).toFixed(digits)}%`;
 }
-function mean(nums: number[]) {
-  if (!nums.length) return 0;
-  return nums.reduce((a, b) => a + b, 0) / nums.length;
-}
+function mean(nums: number[]) { return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0; }
 function median(nums: number[]) {
   if (!nums.length) return 0;
   const s = [...nums].sort((a, b) => a - b);
@@ -49,7 +41,6 @@ function wilsonUpperLower(pHat: number, n: number, z = 1.96) {
   const margin = (z * Math.sqrt((pHat * (1 - pHat)) / n + (z ** 2) / (4 * n ** 2))) / denom;
   return { lo: Math.max(0, center - margin), hi: Math.min(1, center + margin) };
 }
-// Normal CDF approx
 function normalCDF(x: number) {
   const t = 1 / (1 + 0.2316419 * Math.abs(x));
   const d = 0.3989422804014327 * Math.exp(-(x * x) / 2);
@@ -58,7 +49,8 @@ function normalCDF(x: number) {
   return x >= 0 ? p : 1 - p;
 }
 
-// ====== Stat mapping ======
+/* ================= Stat mapping ================= */
+
 type StatKey =
   | "pts" | "reb" | "ast" | "stl" | "blk" | "to"
   | "pra" | "pr" | "pa" | "ra" | "stocks";
@@ -86,10 +78,15 @@ const REST_OPTIONS: { value: "" | "0" | "1" | "2" | "3+"; label: string }[] = [
 ];
 
 type LogRow = {
-  date: string; // YYYY-MM-DD
+  date: string;
   opp?: number | string;
   ha?: "H" | "A" | "";
   min?: number;
+  gameId?: number;
+  game_id?: number;
+  game?: { id?: number };
+  teammatePlayed?: boolean;
+  teammateMin?: number;
   pts?: number; reb?: number; ast?: number; stl?: number; blk?: number; to?: number; "3ptm"?: number;
 };
 
@@ -116,19 +113,26 @@ function computeStat(row: LogRow, stat: StatKey): number {
   }
 }
 
-// ====== Page ======
+/* ================= Page ================= */
+
 export default function HomePage() {
   // form state
   const [playerQuery, setPlayerQuery] = useState("");
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [playerName, setPlayerName] = useState("");
 
+  // teammate-out filter
+  const [teammateQuery, setTeammateQuery] = useState("");
+  const [teammateId, setTeammateId] = useState<string | null>(null);
+  const [teammateName, setTeammateName] = useState("");
+  const [teammateMaxMinutes, setTeammateMaxMinutes] = useState("0");
+
   const [season, setSeason] = useState("2024-25");
   const seasonNum = Number(season.split("-")[0]) || undefined;
 
   const [statKey, setStatKey] = useState<StatKey>("pts");
-  const [lastX, setLastX] = useState("");             // blank = all
-  const [minMinutes, setMinMinutes] = useState("");   // blank = none
+  const [lastX, setLastX] = useState("");
+  const [minMinutes, setMinMinutes] = useState("");
   const [homeAway, setHomeAway] = useState<"" | "H" | "A">("");
   const [opp, setOpp] = useState("");
   const [rest, setRest] = useState<"" | "0" | "1" | "2" | "3+">("");
@@ -153,7 +157,21 @@ export default function HomePage() {
     setPlayerQuery(nm);
   };
 
-  // fetch logs
+  const onTeammateSelect = (p: { id: string | number; full_name?: string; name?: string } | null) => {
+    if (!p) {
+      setTeammateId(null);
+      setTeammateName("");
+      setTeammateQuery("");
+      return;
+    }
+    const nm = p.full_name || p.name || "";
+    setTeammateId(String(p.id));
+    setTeammateName(nm);
+    setTeammateQuery(nm);
+  };
+
+  const toISODate = (s: string) => (s || "").slice(0, 10);
+
   const fetchLogs = useCallback(async () => {
     try {
       setLoading(true);
@@ -183,17 +201,96 @@ export default function HomePage() {
         setLoading(false);
         return;
       }
-      const rows: LogRow[] = Array.isArray(j.logs) ? j.logs : [];
+      let rows: LogRow[] = Array.isArray(j.logs) ? j.logs : [];
+
+      if (teammateId) {
+        try {
+          const r = await fetch("/api/game-logs/teammate-out", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              playerId: Number(playerId),
+              teammateId: Number(teammateId),
+              season: seasonNum,
+              maxMinutes: Number(teammateMaxMinutes) || 0,
+            }),
+          });
+
+          if (!r.ok) {
+            const txt = await r.text().catch(() => "");
+            throw new Error(txt || "Teammate filter endpoint error");
+          }
+
+          const data = await r.json();
+
+          const outIds = new Set<number>(
+            Array.isArray(data.outGameIds) ? data.outGameIds.map((x: any) => Number(x)).filter(Number.isFinite) : []
+          );
+          let outDates = new Set<string>(
+            Array.isArray(data.outDates) ? data.outDates.map((d: any) => String(d).slice(0, 10)) : []
+          );
+
+          // Map IDs -> dates if needed
+          if (!outDates.size && outIds.size) {
+            const BDL_BASE = process.env.NEXT_PUBLIC_BDL_BASE || "https://api.balldontlie.io/v1";
+            const KEY = process.env.NEXT_PUBLIC_BDL_KEY || "";
+            const AUTH = KEY ? (KEY.startsWith("Bearer ") ? KEY : `Bearer ${KEY}`) : "";
+            const headers: HeadersInit = AUTH ? { Authorization: AUTH } : {};
+
+            const ids = Array.from(outIds);
+            const chunkSize = 90;
+            const mappedDates: string[] = [];
+
+            for (let i = 0; i < ids.length; i += chunkSize) {
+              const chunk = ids.slice(i, i + chunkSize);
+              const qs = new URLSearchParams();
+              qs.append("player_ids[]", String(playerId));
+              chunk.forEach((g) => qs.append("game_ids[]", String(g)));
+              qs.set("per_page", "100");
+              const rr = await fetch(`${BDL_BASE}/stats?${qs.toString()}`, { cache: "no-store", headers });
+              if (rr.ok) {
+                const jj = await rr.json();
+                for (const s of (jj?.data ?? []) as any[]) {
+                  const d = toISODate(s?.game?.date || "");
+                  if (d) mappedDates.push(d);
+                }
+              }
+            }
+            outDates = new Set(mappedDates);
+          }
+
+          if (outIds.size || outDates.size) {
+            rows = rows.filter((rw) => {
+              const gid = (rw.gameId ?? rw.game_id ?? rw.game?.id) as number | undefined;
+              if (gid != null && outIds.size) return outIds.has(Number(gid));
+              if (outDates.size) return outDates.has(rw.date);
+              return true;
+            });
+          } else {
+            rows = rows.filter((rw) => {
+              const played = rw.teammatePlayed ?? ((rw.teammateMin ?? 0) > 0);
+              return played === false;
+            });
+          }
+        } catch (err: any) {
+          setError(`Could not apply teammate filter: ${err?.message || ""}`);
+        }
+      }
+
       setLogs(rows);
     } catch (e: any) {
       setError(e?.message || "Could not fetch logs.");
     } finally {
       setLoading(false);
     }
-  }, [playerId, seasonNum, statKey, lastX, minMinutes, homeAway, opp, rest]);
+  }, [
+    playerId, seasonNum, statKey, lastX, minMinutes, homeAway, opp, rest,
+    teammateId, teammateMaxMinutes
+  ]);
 
   const reset = () => {
     setPlayerQuery(""); setPlayerId(null); setPlayerName("");
+    setTeammateQuery(""); setTeammateId(null); setTeammateName(""); setTeammateMaxMinutes("0");
     setSeason("2024-25");
     setStatKey("pts");
     setLastX("");
@@ -206,9 +303,10 @@ export default function HomePage() {
     setLogs([]); setError(null);
   };
 
-  // derived lists
+  /* ================= Derived lists & metrics ================= */
+
   const cleanLogs = useMemo(() => {
-    const rows = (logs || []).filter(r => (r.min ?? 0) > 0); // auto-exclude 0 minutes
+    const rows = (logs || []).filter(r => (r.min ?? 0) > 0);
     rows.sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : 0));
     return rows;
   }, [logs]);
@@ -224,9 +322,8 @@ export default function HomePage() {
   const awayAvg = mean(cleanLogs.filter(r => r.ha === "A").map(r => computeStat(r, statKey)));
   const weightedAvg = useMemo(() => {
     if (!statSeries.length) return 0;
-    // recency weight: newest gets ~1.5 → down to 0.5
     const n = statSeries.length;
-    const weights = statSeries.map((_, i) => 0.5 + (1.0 * (n - i)) / n); // sorted desc
+    const weights = statSeries.map((_, i) => 0.5 + (1.0 * (n - i)) / n);
     const totalW = weights.reduce((a, b) => a + b, 0);
     return statSeries.reduce((sum, v, i) => sum + v * weights[i], 0) / totalW;
   }, [statSeries]);
@@ -256,15 +353,14 @@ export default function HomePage() {
     return pOver * profit100 - (1 - pOver) * 100;
   }, [pOver, profit100, hasEdgeInputs]);
 
-  // Confidence = P(true p > breakeven) via normal approx around Wilson center
   const confidencePct = useMemo(() => {
     if (!hasEdgeInputs || !gamesCount) return NaN;
     const pHat = clamp01(pOver);
-    const { lo, hi } = wilsonUpperLower(pHat, gamesCount, 1.64); // ~90%
+    const { lo, hi } = wilsonUpperLower(pHat, gamesCount, 1.64);
     const center = (lo + hi) / 2;
     const se = Math.max(1e-6, Math.sqrt(center * (1 - center) / gamesCount));
     const z = (center - beProb) / se;
-    const c = normalCDF(z); // probability that p > breakeven
+    const c = normalCDF(z);
     return clamp01(c);
   }, [hasEdgeInputs, gamesCount, pOver, beProb]);
 
@@ -277,7 +373,8 @@ export default function HomePage() {
       ? "border-amber-700 bg-amber-50 text-amber-900 dark:bg-amber-900/20 dark:text-amber-200"
       : "border-red-800 bg-red-50 text-red-900 dark:bg-red-900/20 dark:text-red-200";
 
-  // CSV export
+  /* ================= CSV export ================= */
+
   const onExportCSV = () => {
     if (!cleanLogs.length) return;
     const cols = ["Date","Opp","H/A","Min","Pts","Reb","Ast","3PTM","Blk","Stl","TO","PRA","PR","PA","RA","Stocks"];
@@ -300,7 +397,8 @@ export default function HomePage() {
     URL.revokeObjectURL(url);
   };
 
-  // ====== UI ======
+  /* ================= UI ================= */
+
   return (
     <div className="mx-auto max-w-6xl px-4 pb-24">
       <h1 className="mt-8 text-2xl font-semibold">NBA Prop Research</h1>
@@ -315,6 +413,30 @@ export default function HomePage() {
           <div>
             <label className="mb-1 block text-xs text-neutral-500 dark:text-neutral-400">Player</label>
             <PlayerSearchBox value={playerQuery} onChange={setPlayerQuery} onSelect={onPlayerSelect} />
+          </div>
+
+          {/* Teammate OUT (optional) */}
+          <div>
+            <label className="mb-1 block text-xs text-neutral-500 dark:text-neutral-400">
+              Filter to games when this teammate was OUT (optional)
+            </label>
+            <PlayerSearchBox value={teammateQuery} onChange={setTeammateQuery} onSelect={onTeammateSelect} />
+            <div className="mt-2 flex items-center gap-2">
+              <span className="text-xs text-neutral-500 dark:text-neutral-400">Count as OUT if minutes ≤</span>
+              <input
+                inputMode="numeric"
+                className="w-20 rounded-lg border border-neutral-300 bg-white px-2 py-1 text-neutral-900
+                           dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-100"
+                value={teammateMaxMinutes}
+                onChange={(e) => setTeammateMaxMinutes(e.target.value.replace(/[^0-9]/g, ""))}
+              />
+              <span className="text-xs text-neutral-500 dark:text-neutral-400">min</span>
+            </div>
+            {teammateName ? (
+              <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                Applying filter for: <span className="font-medium">{teammateName}</span>
+              </div>
+            ) : null}
           </div>
 
           {/* Season */}
@@ -586,7 +708,8 @@ export default function HomePage() {
   );
 }
 
-// Simple KPI card
+/* ================= Simple KPI card ================= */
+
 function Kpi({ title, value, hint, extraClass }: { title: string; value: string; hint?: string; extraClass?: string }) {
   return (
     <div className={`rounded-xl border p-4 ${extraClass || "border-neutral-200 dark:border-neutral-800"}`}>
