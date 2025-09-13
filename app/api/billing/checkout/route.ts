@@ -1,69 +1,93 @@
 // app/api/billing/checkout/route.ts
 import { NextResponse } from "next/server";
-import { auth } from "@/auth"; // ✅ NextAuth v5 helper
-import { stripe } from "@/lib/stripe"; // make sure this exports a configured Stripe client
+import Stripe from "stripe";
+import { auth } from "@/lib/auth";
 
-// Where to send users back after Stripe
-const APP_URL =
-  process.env.NEXT_PUBLIC_APP_URL ||
-  process.env.AUTH_URL ||
-  "http://localhost:3000";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-// Price ID for the Season pass (configure in Vercel env)
-const PRICE_SEASON =
-  process.env.STRIPE_PRICE_SEASON || // preferred
-  process.env.STRIPE_PRICE_SEASON_PASS || // optional alias
-  process.env.STRIPE_PRICE || // last-ditch fallback if you only have one price
-  "";
+// Map friendly plan -> expected env var name that holds the Price ID
+const PRICE_ENV_BY_PLAN: Record<string, string> = {
+  season: "STRIPE_PRICE_SEASON",
+  month:  "STRIPE_PRICE_MONTH",
+  week:   "STRIPE_PRICE_WEEK",
+  day:    "STRIPE_PRICE_DAY",
+};
 
-export async function POST(req: Request) {
+// Create the checkout session (shared by GET and POST)
+async function createSession(req: Request, planIn?: string) {
+  const session = await auth();
+  const email = session?.user?.email;
+  if (!email) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Plan from request (POST body, or GET ?plan=), default to "season"
+  let plan = (planIn || "season").toLowerCase();
+  if (!PRICE_ENV_BY_PLAN[plan]) plan = "season";
+
+  const priceId = process.env[PRICE_ENV_BY_PLAN[plan]];
+  const secretKey = process.env.STRIPE_SECRET_KEY;
+
+  if (!secretKey || !priceId) {
+    return NextResponse.json(
+      { ok: false, error: "Stripe configuration missing (price or secret key)." },
+      { status: 500 }
+    );
+  }
+
+  // Use default API version from the SDK to avoid TS apiVersion type mismatches
+  const stripe = new Stripe(secretKey);
+
+  // Derive origin for success/cancel URLs
+  const origin =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    new URL(req.url).origin;
+
   try {
-    // Must be signed in
-    const session = await auth();
-    const email = session?.user?.email;
-    if (!email) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    // Simple body – { plan: "season" }
-    const { plan } = (await req.json().catch(() => ({}))) as {
-      plan?: string;
-    };
-    if (plan !== "season") {
-      return NextResponse.json({ error: "Unknown plan" }, { status: 400 });
-    }
-
-    if (!PRICE_SEASON) {
-      return NextResponse.json(
-        { error: "Server misconfigured: missing STRIPE_PRICE_SEASON" },
-        { status: 500 }
-      );
-    }
-
-    // One-time season pass purchase. If you sell subscriptions, switch to mode: "subscription"
-    const checkout = await stripe.checkout.sessions.create({
+    const cs = await stripe.checkout.sessions.create({
+      // Season pass is typically a one-time payment; switch to "subscription" if yours is recurring
       mode: "payment",
-      payment_method_types: ["card"],
-      line_items: [{ price: PRICE_SEASON, quantity: 1 }],
+      line_items: [{ price: priceId, quantity: 1 }],
       customer_email: email,
-      allow_promotion_codes: true,
-      metadata: {
-        plan: "season",
-        userEmail: email,
-      },
-      success_url: `${APP_URL}/account/plan?status=success`,
-      cancel_url: `${APP_URL}/account/plan?status=cancelled`,
+      success_url: `${origin}/account/plan?checkout=success`,
+      cancel_url: `${origin}/account/plan?checkout=cancel`,
+      metadata: { plan, email },
     });
 
-    return NextResponse.json({ ok: true, url: checkout.url });
+    if (!cs.url) {
+      return NextResponse.json({ ok: false, error: "No checkout URL returned." }, { status: 500 });
+    }
+
+    return NextResponse.json({ ok: true, url: cs.url });
   } catch (e: any) {
-    const msg =
-      e?.message || e?.error?.message || "Unexpected error creating checkout session";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    const msg = e?.message || "Unexpected error creating checkout session";
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }
 
-// Optional: explicitly reject GET so stray links don't hit this endpoint
-export function GET() {
-  return NextResponse.json({ error: "Method not allowed" }, { status: 405 });
+// POST /api/billing/checkout  (returns JSON { url })
+export async function POST(req: Request) {
+  let plan: string | undefined;
+  try {
+    const body = await req.json().catch(() => null);
+    plan = body?.plan as string | undefined;
+  } catch {
+    /* ignore body parse errors */
+  }
+  return createSession(req, plan);
+}
+
+// GET /api/billing/checkout?plan=season  (redirects to Stripe)
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const plan = url.searchParams.get("plan") || undefined;
+
+  const json = await createSession(req, plan);
+  const data = await json.json();
+  if (json.ok && data?.url) {
+    // 303 so the browser follows with GET
+    return NextResponse.redirect(data.url as string, { status: 303 });
+  }
+  return json; // bubble up the JSON error
 }
