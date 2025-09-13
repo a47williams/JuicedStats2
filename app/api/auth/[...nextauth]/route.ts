@@ -1,5 +1,3 @@
 // app/api/auth/[...nextauth]/route.ts
-import { handlers } from "@/auth";
-
-// Re-export the GET and POST handlers for Next.js route typing
+import { handlers } from "@/lib/auth";
 export const { GET, POST } = handlers;
