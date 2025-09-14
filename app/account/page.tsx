@@ -1,156 +1,167 @@
-// app/account/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
 
 type Plan = "FREE" | "PRO";
-type VerifyResponse = {
-  ok: boolean;
-  plan: Plan;
-  email?: string | null;
-  customerId?: string | null;
-  expiresAt?: string | null;
-  error?: string;
-};
 
 export default function AccountPage() {
-  const [loading, setLoading] = useState(true);
-  const [plan, setPlan] = useState<Plan>("FREE");
-  const [email, setEmail] = useState<string | null>(null);
+  const [plan, setPlan] = useState<Plan | null>(null);
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  const isPro = plan === "PRO";
+  const [msg, setMsg] = useState<string>("Checking your plan…");
+  const [busy, setBusy] = useState(false);
 
+  // Hit /api/stripe/verify and pass through any ?session_id returned by Stripe
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/api/stripe/verify", { cache: "no-store" });
-        const data: VerifyResponse = await res.json();
-        if (data.ok) {
-          setPlan(data.plan);
-          setEmail(data.email ?? null);
-          setExpiresAt(data.expiresAt ?? null);
+        const qs = typeof window !== "undefined" ? window.location.search : "";
+        const res = await fetch(`/api/stripe/verify${qs}`, { cache: "no-store" });
+        const data = await res.json();
+
+        if (!res.ok) {
+          setMsg(`Verify failed: ${data?.error ?? res.statusText}`);
+          setPlan("FREE");
+          return;
+        }
+
+        setPlan(data.plan as Plan);
+        setExpiresAt(data.expiresAt ?? null);
+
+        if (data.plan === "PRO") {
+          setMsg(
+            data.expiresAt
+              ? `You're Pro. Renews ${new Date(data.expiresAt).toLocaleString()}.`
+              : "You're Pro. 🎉"
+          );
         } else {
-          setMsg(data.error ?? "Unable to verify subscription.");
+          setMsg("You’re on the FREE plan.");
         }
       } catch (err: any) {
-        setMsg(err?.message ?? "Unable to verify subscription.");
-      } finally {
-        setLoading(false);
+        setMsg(`Verify error: ${err?.message ?? "unknown"}`);
+        setPlan("FREE");
       }
     })();
   }, []);
 
-  async function goToCheckout() {
-    const url = new URL("/api/billing/checkout", location.origin);
-    url.searchParams.set("return_url", location.origin + "/account");
-    // GET endpoint that redirects
-    location.href = url.toString();
-  }
-
-  async function openPortal() {
+  async function onUpgrade() {
     try {
-      const res = await fetch("/api/billing/portal", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ return_url: location.origin + "/account" }),
-      });
-      const data = (await res.json()) as { url?: string; error?: string };
-      if (data.url) location.href = data.url;
-      else alert(data.error ?? "Could not open billing portal.");
-    } catch (e: any) {
-      alert(e?.message ?? "Could not open billing portal.");
+      setBusy(true);
+      const here = typeof window !== "undefined" ? window.location.href : "/";
+      const res = await fetch(`/api/billing/checkout?return_url=${encodeURIComponent(here)}`);
+      const data = await res.json();
+      if (!res.ok || !data?.url) {
+        setMsg(`Checkout failed: ${data?.error ?? res.statusText}`);
+        setBusy(false);
+        return;
+      }
+      window.location.href = data.url as string; // Redirect to Stripe Checkout
+    } catch (err: any) {
+      setMsg(`Checkout error: ${err?.message ?? "unknown"}`);
+      setBusy(false);
     }
   }
 
-  const Feature = ({ children }: { children: React.ReactNode }) => (
-    <li className="flex items-start gap-2">
-      <span className="mt-1.5 h-2 w-2 rounded-full bg-current" />
-      <span>{children}</span>
-    </li>
+  const Panel = ({
+    title,
+    children,
+  }: {
+    title: string;
+    children: React.ReactNode;
+  }) => (
+    <div
+      style={{
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: 12,
+        padding: 20,
+      }}
+    >
+      <h3 style={{ margin: "0 0 8px 0", fontWeight: 600 }}>{title}</h3>
+      {children}
+    </div>
   );
 
   return (
-    <main className="mx-auto max-w-3xl p-6">
-      <h1 className="text-2xl font-semibold">Account</h1>
+    <main style={{ padding: 24, maxWidth: 980, margin: "0 auto" }}>
+      <h1>Account</h1>
 
-      <div className="mt-4 rounded-lg border p-4">
-        {loading ? (
-          <p>Checking your subscription…</p>
-        ) : (
-          <>
-            <p className="text-sm text-neutral-600">
-              Signed in as <strong>{email ?? "your account"}</strong>
-            </p>
+      <div style={{ display: "grid", gap: 16, marginTop: 12 }}>
+        <Panel title="Signed in as your account">
+          <p style={{ margin: "6px 0 12px 0" }}>
+            <strong>Current plan:</strong>{" "}
+            <span style={{ color: plan === "PRO" ? "#22c55e" : "#f97316" }}>
+              {plan ?? "…"}
+            </span>
+          </p>
 
-            <div className="mt-3 flex items-center justify-between">
-              <div>
-                <p className="text-lg">
-                  Current plan:{" "}
-                  <strong className={isPro ? "text-green-600" : "text-amber-600"}>
-                    {isPro ? "PRO" : "FREE"}
-                  </strong>
-                </p>
-                {isPro && expiresAt && (
-                  <p className="text-sm text-neutral-500">
-                    Renews / Expires: {new Date(expiresAt).toLocaleString()}
-                  </p>
-                )}
-                {msg && (
-                  <p className="mt-2 text-sm text-red-600">Note: {msg}</p>
-                )}
-              </div>
+          <p style={{ margin: "0 0 14px 0", opacity: 0.85 }}>{msg}</p>
 
-              <div className="flex gap-2">
-                {isPro ? (
-                  <button
-                    onClick={openPortal}
-                    className="rounded-md border px-3 py-2"
-                  >
-                    Manage billing
-                  </button>
-                ) : (
-                  <button
-                    onClick={goToCheckout}
-                    className="rounded-md border px-3 py-2"
-                  >
-                    Upgrade to Pro
-                  </button>
-                )}
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-
-      <section className="mt-6 grid gap-4 md:grid-cols-2">
-        <div className="rounded-lg border p-4">
-          <h2 className="mb-2 text-lg font-medium">Free features</h2>
-          <ul className="space-y-2 text-sm">
-            <Feature>Player search and basic stats</Feature>
-            <Feature>Recent games view</Feature>
-            <Feature>Shareable links</Feature>
-          </ul>
-        </div>
-
-        <div className={`rounded-lg border p-4 ${isPro ? "" : "opacity-80"}`}>
-          <h2 className="mb-2 text-lg font-medium">Pro features</h2>
-          <ul className="space-y-2 text-sm">
-            <Feature>Advanced filters & KPI grid</Feature>
-            <Feature>Save custom views</Feature>
-            <Feature>CSV export</Feature>
-            <Feature>Priority data refresh</Feature>
-          </ul>
-          {!isPro && (
+          {plan !== "PRO" ? (
             <button
-              onClick={goToCheckout}
-              className="mt-4 rounded-md border px-3 py-2"
+              onClick={onUpgrade}
+              disabled={busy}
+              style={{
+                padding: "10px 16px",
+                borderRadius: 10,
+                border: "1px solid rgba(255,255,255,0.18)",
+                cursor: busy ? "not-allowed" : "pointer",
+                opacity: busy ? 0.6 : 1,
+              }}
+              aria-busy={busy}
             >
-              Unlock Pro
+              {busy ? "Starting checkout…" : "Upgrade to Pro"}
             </button>
+          ) : (
+            <div style={{ fontSize: 14, opacity: 0.9 }}>
+              {expiresAt
+                ? `Renews ${new Date(expiresAt).toLocaleString()}`
+                : "Thanks for supporting JuicedStats!"}
+            </div>
           )}
+        </Panel>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 16,
+          }}
+        >
+          <Panel title="Free features">
+            <ul style={{ margin: 0, paddingLeft: 18, opacity: 0.95 }}>
+              <li>Player search and basic stats</li>
+              <li>Recent games view</li>
+              <li>Shareable links</li>
+            </ul>
+          </Panel>
+
+          <Panel title="Pro features">
+            <ul style={{ margin: 0, paddingLeft: 18, opacity: 0.95 }}>
+              <li>Advanced filters & KPI grid</li>
+              <li>Save custom views</li>
+              <li>CSV export</li>
+              <li>Priority data refresh</li>
+            </ul>
+
+            {plan !== "PRO" && (
+              <button
+                onClick={onUpgrade}
+                disabled={busy}
+                style={{
+                  marginTop: 12,
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.18)",
+                  cursor: busy ? "not-allowed" : "pointer",
+                  opacity: busy ? 0.6 : 1,
+                }}
+                aria-busy={busy}
+              >
+                Unlock Pro
+              </button>
+            )}
+          </Panel>
         </div>
-      </section>
+      </div>
     </main>
   );
 }
