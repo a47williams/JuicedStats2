@@ -1,44 +1,41 @@
+// components/AuthButtons.tsx
 "use client";
 
+import { signIn, signOut, useSession } from "next-auth/react";
 import Link from "next/link";
-import { useSession, signIn, signOut } from "next-auth/react";
 
-export default function AuthButtons() {
-  const { data: session, status } = useSession();
-
-  if (status === "loading") {
-    return <div className="h-9 w-20 rounded-lg bg-neutral-200 dark:bg-neutral-800 animate-pulse" />;
-  }
-
-  if (!session) {
-    return (
-      <button
-        onClick={() => signIn()}
-        className="rounded-lg border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-50
-                   dark:border-neutral-700 dark:hover:bg-neutral-900"
-      >
-        Sign in
-      </button>
-    );
-  }
-
+export function SignInButton() {
   return (
-    <div className="flex items-center gap-2">
-      <Link
-        href="/account"
-        className="rounded-lg border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-50
-                   dark:border-neutral-700 dark:hover:bg-neutral-900"
-      >
-        Account
-      </Link>
-
-      <button
-        onClick={() => signOut({ callbackUrl: "/" })}
-        className="rounded-lg bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-800
-                   dark:bg-white dark:text-black dark:hover:bg-neutral-200"
-      >
-        Sign out
-      </button>
-    </div>
+    <button onClick={() => signIn("google", { callbackUrl: "/" })} className="px-3 py-2 rounded-md border">
+      Sign in with Google
+    </button>
   );
+}
+
+export function SignOutButton() {
+  return (
+    <button onClick={() => signOut({ callbackUrl: "/" })} className="px-3 py-2 rounded-md border">
+      Sign out
+    </button>
+  );
+}
+
+export function AccountMenu() {
+  const { data: session, status } = useSession();
+  if (status === "loading") return null;
+
+  return session ? (
+    <div className="flex items-center gap-3">
+      <span className="text-sm">Hi, {session.user?.name ?? "user"}</span>
+      <Link href="/account" className="underline">Account</Link>
+      <SignOutButton />
+    </div>
+  ) : (
+    <SignInButton />
+  );
+}
+
+// 👇 default export so you can <AuthButtons />
+export default function AuthButtons() {
+  return <AccountMenu />;
 }
