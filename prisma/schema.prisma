@@ -1,32 +1,33 @@
 // prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:./dev.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
-// ---------- Auth.js / NextAuth models (SQLite-safe)
+// -------------------- Auth / NextAuth models --------------------
 
 model User {
-  id             String    @id @default(cuid())
-  name           String?
-  email          String?   @unique
-  emailVerified  DateTime?            // ← add this back to match Prisma Adapter
-  image          String?
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
 
   // app-specific fields
-  plan           String?   @default("FREE")
-  proUntil       DateTime?
+  plan     String?   @default("FREE")
+  proUntil DateTime?
 
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  accounts       Account[]
-  sessions       Session[]
-  views          View[]
+  accounts Account[]
+  sessions Session[]
+  views    View[]
 }
 
 model Account {
@@ -35,17 +36,18 @@ model Account {
   type              String
   provider          String
   providerAccountId String
-  refresh_token     String?
-  access_token      String?
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
   expires_at        Int?
   token_type        String?
   scope             String?
-  id_token          String?
+  id_token          String? @db.Text
   session_state     String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
+  @@index([userId])
 }
 
 model Session {
@@ -55,6 +57,8 @@ model Session {
   expires      DateTime
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model VerificationToken {
@@ -65,14 +69,14 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
-// ---------- App models
+// -------------------- App models --------------------
 
-// NOTE: SQLite doesn't support JSON column type, so we store JSON as String.
 model View {
   id        String   @id @default(cuid())
   userId    String
   name      String
-  params    String   // JSON string (serialize/parse in code)
+  // store JSON as string for now
+  params    String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

@@ -1,43 +1,17 @@
 // lib/auth.ts
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
-// If you use Prisma:
-import { PrismaAdapter } from "@auth/prisma-adapter";
-import { prisma } from "./prisma"; // change if your prisma path differs
 
-export const {
-  handlers: { GET, POST },
-  auth,
-  signIn,
-  signOut,
-} = NextAuth({
-  // If you use Prisma, keep the adapter. Otherwise, remove the adapter line.
-  adapter: PrismaAdapter(prisma),
-
-  session: { strategy: "jwt" },
-
+export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
     Google({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-      allowDangerousEmailAccountLinking: true,
+      // support either the v5 AUTH_* names or your existing GOOGLE_* names
+      clientId:
+        process.env.AUTH_GOOGLE_ID ?? process.env.GOOGLE_CLIENT_ID ?? "",
+      clientSecret:
+        process.env.AUTH_GOOGLE_SECRET ?? process.env.GOOGLE_CLIENT_SECRET ?? "",
     }),
-    // add other providers here
   ],
-
-  // Optional: tighten callbacks as needed
-  callbacks: {
-    async jwt({ token, account, profile }) {
-      // attach anything you need on the token here
-      return token;
-    },
-    async session({ session, token }) {
-      // expose token fields on session here
-      return session;
-    },
-  },
-
-  // Important in prod
-  secret: process.env.AUTH_SECRET,
-  trustHost: true,
+  // REQUIRED in production
+  secret: process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET,
 });
