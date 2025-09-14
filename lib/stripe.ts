@@ -1,12 +1,13 @@
 // lib/stripe.ts
 import Stripe from "stripe";
 
-let _stripe: Stripe | null = null;
+export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? "", {
+  apiVersion: "2023-10-16",
+});
 
-export function getStripe() {
-  if (_stripe) return _stripe;
-  _stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-  return _stripe;
-}
-
-export const stripe = getStripe();
+// Single Pro subscription price ID (Stripe Dashboard → Price ID)
+// Make sure this is set in your env (Vercel / .env.local)
+export const STRIPE_PRICE_ID =
+  process.env.STRIPE_PRICE_ID ??
+  process.env.NEXT_PUBLIC_STRIPE_PRICE_ID ?? // fallback if you accidentally used public var
+  "";
