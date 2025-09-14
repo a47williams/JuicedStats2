@@ -1,43 +1,39 @@
 // app/api/billing/checkout/route.ts
 import { NextResponse } from "next/server";
-import { stripe, STRIPE_PRICE_ID } from "@/lib/stripe";
+import { auth } from "@/lib/auth"; // your next-auth helper
+import { stripe, priceForPlan, baseUrl } from "@/lib/stripe";
 
 export const dynamic = "force-dynamic";
-export const revalidate = 0;
 
 export async function GET(req: Request) {
   try {
+    const session = await auth();
+    const email = session?.user?.email;
+    if (!email) {
+      return NextResponse.json({ ok: false, error: "Not signed in" }, { status: 401 });
+    }
+
     const url = new URL(req.url);
-    const origin = url.origin;
-    const returnUrl = url.searchParams.get("return_url") ?? `${origin}/account`;
+    const planParam = url.searchParams.get("plan") || "monthly";
+    const { id: priceId, plan } = priceForPlan(planParam);
 
-    if (!process.env.STRIPE_SECRET_KEY) {
-      return NextResponse.json(
-        { error: "Missing STRIPE_SECRET_KEY" },
-        { status: 500 }
-      );
-    }
-
-    if (!STRIPE_PRICE_ID) {
-      return NextResponse.json(
-        { error: "Missing STRIPE_PRICE_ID (set it in your env)" },
-        { status: 500 }
-      );
-    }
-
-    const session = await stripe.checkout.sessions.create({
+    const checkout = await stripe.checkout.sessions.create({
       mode: "subscription",
-      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+      ui_mode: "hosted",
       allow_promotion_codes: true,
-      success_url: `${origin}/account?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: returnUrl,
+      customer_email: email,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${baseUrl}/account/plan?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${baseUrl}/account/plan?cancelled=1`,
+      metadata: { plan, email },
+      subscription_data: { metadata: { plan, email } },
     });
 
-    return NextResponse.json({ url: session.url }, { status: 200 });
+    return NextResponse.json({ ok: true, url: checkout.url, id: checkout.id });
   } catch (err: any) {
     console.error("checkout error", err);
     return NextResponse.json(
-      { error: err?.message ?? "Checkout failed" },
+      { ok: false, error: err?.message ?? "Checkout failed" },
       { status: 500 }
     );
   }
