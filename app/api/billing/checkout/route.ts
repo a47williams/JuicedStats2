@@ -1,43 +1,41 @@
 // app/api/billing/checkout/route.ts
-import { NextResponse } from "next/server";
-import { stripe, STRIPE_PRICE_ID } from "@/lib/stripe";
+import { NextRequest, NextResponse } from "next/server";
+import { stripe, getPriceId, type PlanKey } from "@/lib/stripe";
+// If you want to attach email/customer, wire up your session util here:
+// import { auth } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
-export const revalidate = 0;
 
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
-    const origin = url.origin;
-    const returnUrl = url.searchParams.get("return_url") ?? `${origin}/account`;
+    const plan = (url.searchParams.get("plan") || "monthly") as PlanKey;
 
-    if (!process.env.STRIPE_SECRET_KEY) {
-      return NextResponse.json(
-        { error: "Missing STRIPE_SECRET_KEY" },
-        { status: 500 }
-      );
-    }
+    const origin = req.nextUrl.origin;
+    const returnUrl = url.searchParams.get("return_url") || `${origin}/account`;
 
-    if (!STRIPE_PRICE_ID) {
-      return NextResponse.json(
-        { error: "Missing STRIPE_PRICE_ID (set it in your env)" },
-        { status: 500 }
-      );
-    }
+    const price = getPriceId(plan);
 
-    const session = await stripe.checkout.sessions.create({
+    // const session = await auth();
+    // const customer_email = session?.user?.email ?? undefined;
+
+    const checkout = await stripe.checkout.sessions.create({
       mode: "subscription",
-      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+      // customer_email,
+      line_items: [{ price, quantity: 1 }],
       allow_promotion_codes: true,
-      success_url: `${origin}/account?session_id={CHECKOUT_SESSION_ID}`,
+      success_url: `${origin}/api/stripe/verify?session_id={CHECKOUT_SESSION_ID}&return_url=${encodeURIComponent(
+        returnUrl
+      )}`,
       cancel_url: returnUrl,
+      metadata: { plan },
     });
 
-    return NextResponse.json({ url: session.url }, { status: 200 });
+    return NextResponse.json({ ok: true, url: checkout.url });
   } catch (err: any) {
-    console.error("checkout error", err);
+    console.error("checkout error:", err);
     return NextResponse.json(
-      { error: err?.message ?? "Checkout failed" },
+      { ok: false, error: err?.message ?? "Checkout failed" },
       { status: 500 }
     );
   }

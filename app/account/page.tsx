@@ -1,165 +1,75 @@
+// app/account/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
-type Plan = "FREE" | "PRO";
+type PlanKey = "day" | "week" | "monthly" | "season";
 
 export default function AccountPage() {
-  const [plan, setPlan] = useState<Plan | null>(null);
-  const [expiresAt, setExpiresAt] = useState<string | null>(null);
-  const [msg, setMsg] = useState<string>("Checking your plan…");
-  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState<PlanKey | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
 
-  // Hit /api/stripe/verify and pass through any ?session_id returned by Stripe
-  useEffect(() => {
-    (async () => {
-      try {
-        const qs = typeof window !== "undefined" ? window.location.search : "";
-        const res = await fetch(`/api/stripe/verify${qs}`, { cache: "no-store" });
-        const data = await res.json();
-
-        if (!res.ok) {
-          setMsg(`Verify failed: ${data?.error ?? res.statusText}`);
-          setPlan("FREE");
-          return;
-        }
-
-        setPlan(data.plan as Plan);
-        setExpiresAt(data.expiresAt ?? null);
-
-        if (data.plan === "PRO") {
-          setMsg(
-            data.expiresAt
-              ? `You're Pro. Renews ${new Date(data.expiresAt).toLocaleString()}.`
-              : "You're Pro. 🎉"
-          );
-        } else {
-          setMsg("You’re on the FREE plan.");
-        }
-      } catch (err: any) {
-        setMsg(`Verify error: ${err?.message ?? "unknown"}`);
-        setPlan("FREE");
-      }
-    })();
+  const startCheckout = useCallback(async (plan: PlanKey = "monthly") => {
+    try {
+      setMsg(null);
+      setLoading(plan);
+      const res = await fetch(`/api/billing/checkout?plan=${plan}`, { method: "GET" });
+      const data = await res.json();
+      if (!data.ok || !data.url) throw new Error(data.error || "Checkout failed");
+      window.location.href = data.url;
+    } catch (err: any) {
+      setMsg(err?.message || "Checkout failed");
+      setLoading(null);
+    }
   }, []);
 
-  async function onUpgrade() {
-    try {
-      setBusy(true);
-      const here = typeof window !== "undefined" ? window.location.href : "/";
-      const res = await fetch(`/api/billing/checkout?return_url=${encodeURIComponent(here)}`);
-      const data = await res.json();
-      if (!res.ok || !data?.url) {
-        setMsg(`Checkout failed: ${data?.error ?? res.statusText}`);
-        setBusy(false);
-        return;
-      }
-      window.location.href = data.url as string; // Redirect to Stripe Checkout
-    } catch (err: any) {
-      setMsg(`Checkout error: ${err?.message ?? "unknown"}`);
-      setBusy(false);
-    }
-  }
-
-  const Panel = ({
-    title,
-    children,
-  }: {
-    title: string;
-    children: React.ReactNode;
-  }) => (
-    <div
-      style={{
-        border: "1px solid rgba(255,255,255,0.12)",
-        borderRadius: 12,
-        padding: 20,
-      }}
-    >
-      <h3 style={{ margin: "0 0 8px 0", fontWeight: 600 }}>{title}</h3>
-      {children}
-    </div>
-  );
-
   return (
-    <main style={{ padding: 24, maxWidth: 980, margin: "0 auto" }}>
-      <h1>Account</h1>
+    <main className="p-6 space-y-6">
+      <h1 className="text-2xl font-semibold">Account</h1>
 
-      <div style={{ display: "grid", gap: 16, marginTop: 12 }}>
-        <Panel title="Signed in as your account">
-          <p style={{ margin: "6px 0 12px 0" }}>
-            <strong>Current plan:</strong>{" "}
-            <span style={{ color: plan === "PRO" ? "#22c55e" : "#f97316" }}>
-              {plan ?? "…"}
-            </span>
-          </p>
+      <section className="rounded-lg border border-neutral-700 p-5">
+        <p className="text-sm text-neutral-400 mb-2">Signed in as your account</p>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <div className="text-sm">Current plan:</div>
+            <div className="text-lg font-medium">FREE</div>
+            {msg && <p className="mt-2 text-sm text-red-400">Checkout failed: {msg}</p>}
+          </div>
+          <button
+            onClick={() => startCheckout("monthly")}
+            disabled={!!loading}
+            className="rounded-md border border-neutral-600 px-4 py-2 text-sm hover:bg-neutral-800"
+          >
+            {loading === "monthly" ? "Starting…" : "Upgrade to Pro"}
+          </button>
+        </div>
+      </section>
 
-          <p style={{ margin: "0 0 14px 0", opacity: 0.85 }}>{msg}</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="rounded-lg border border-neutral-700 p-5">
+          <h3 className="font-semibold mb-2">Free features</h3>
+          <ul className="list-disc pl-5 space-y-1 text-sm text-neutral-300">
+            <li>Player search and basic stats</li>
+            <li>Recent games view</li>
+            <li>Shareable links</li>
+          </ul>
+        </div>
 
-          {plan !== "PRO" ? (
-            <button
-              onClick={onUpgrade}
-              disabled={busy}
-              style={{
-                padding: "10px 16px",
-                borderRadius: 10,
-                border: "1px solid rgba(255,255,255,0.18)",
-                cursor: busy ? "not-allowed" : "pointer",
-                opacity: busy ? 0.6 : 1,
-              }}
-              aria-busy={busy}
-            >
-              {busy ? "Starting checkout…" : "Upgrade to Pro"}
-            </button>
-          ) : (
-            <div style={{ fontSize: 14, opacity: 0.9 }}>
-              {expiresAt
-                ? `Renews ${new Date(expiresAt).toLocaleString()}`
-                : "Thanks for supporting JuicedStats!"}
-            </div>
-          )}
-        </Panel>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 16,
-          }}
-        >
-          <Panel title="Free features">
-            <ul style={{ margin: 0, paddingLeft: 18, opacity: 0.95 }}>
-              <li>Player search and basic stats</li>
-              <li>Recent games view</li>
-              <li>Shareable links</li>
-            </ul>
-          </Panel>
-
-          <Panel title="Pro features">
-            <ul style={{ margin: 0, paddingLeft: 18, opacity: 0.95 }}>
-              <li>Advanced filters & KPI grid</li>
-              <li>Save custom views</li>
-              <li>CSV export</li>
-              <li>Priority data refresh</li>
-            </ul>
-
-            {plan !== "PRO" && (
-              <button
-                onClick={onUpgrade}
-                disabled={busy}
-                style={{
-                  marginTop: 12,
-                  padding: "10px 14px",
-                  borderRadius: 10,
-                  border: "1px solid rgba(255,255,255,0.18)",
-                  cursor: busy ? "not-allowed" : "pointer",
-                  opacity: busy ? 0.6 : 1,
-                }}
-                aria-busy={busy}
-              >
-                Unlock Pro
-              </button>
-            )}
-          </Panel>
+        <div className="rounded-lg border border-neutral-700 p-5">
+          <h3 className="font-semibold mb-2">Pro features</h3>
+          <ul className="list-disc pl-5 space-y-1 text-sm text-neutral-300">
+            <li>Advanced filters & KPI grid</li>
+            <li>Save custom views</li>
+            <li>CSV export</li>
+            <li>Priority data refresh</li>
+          </ul>
+          <button
+            onClick={() => startCheckout("monthly")}
+            disabled={!!loading}
+            className="mt-4 rounded-md border border-neutral-600 px-4 py-2 text-sm hover:bg-neutral-800"
+          >
+            {loading ? "Starting…" : "Unlock Pro"}
+          </button>
         </div>
       </div>
     </main>
