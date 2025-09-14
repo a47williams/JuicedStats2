@@ -1,22 +1,9 @@
 // lib/flags.ts
-export type Plan = "FREE" | "SEASON" | "MONTHLY";
+export type Plan = "FREE" | "PRO";
 
-/** Beta window: Pro features are open to everyone until BETA_END. */
-export function isBetaOpen(): boolean {
-  const raw = process.env.BETA_END;
-  if (!raw) return false;
-  const end = new Date(raw);
-  if (isNaN(end.getTime())) return false;
-  return Date.now() < end.getTime();
-}
-
-/** Is the user allowed to USE Pro features right now? */
+// Feature toggle: Pro is enabled only when plan is PRO
 export function proFeaturesEnabled(plan: Plan): boolean {
-  // During beta: open for all. After beta: Pro only.
-  return isBetaOpen() || plan !== "FREE";
+  return plan === "PRO";
 }
 
-/** Should UI show locks? (only after beta ends AND plan is FREE) */
-export function shouldLockForFree(plan: Plan): boolean {
-  return !isBetaOpen() && plan === "FREE";
-}
+// (Optional) Keep any other helpers you had, but make sure they accept/return Plan.
