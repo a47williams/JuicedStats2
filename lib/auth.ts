@@ -4,31 +4,33 @@ import Google from "next-auth/providers/google";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "@/lib/prisma";
 
-export const { auth, signIn, signOut, handlers } = NextAuth({
-  trustHost: true,
-  session: { strategy: "database" },
+export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma),
+  session: { strategy: "database" },
+  trustHost: true,
+  // TEMP: turn on if you want verbose logs in Vercel while debugging
+  // debug: true,
   providers: [
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      allowDangerousEmailAccountLinking: true,
     }),
   ],
+  pages: {
+    signIn: "/login",
+  },
   callbacks: {
+    // IMPORTANT: never change host — only allow same-origin redirects
     async redirect({ url, baseUrl }) {
-      // Canonical host from env or current baseUrl
-      const canonical = new URL(process.env.NEXTAUTH_URL ?? baseUrl);
-
-      // Support relative URLs from NextAuth
-      const target = url.startsWith("/")
-        ? new URL(url, canonical)
-        : new URL(url);
-
-      // Never leave the canonical origin (prevents cross-host PKCE cookie loss)
-      if (target.origin !== canonical.origin) {
-        return canonical.toString();
+      try {
+        const u = new URL(url, baseUrl);
+        // keep same-origin (e.g., https://www.juicedstats.com)
+        if (u.origin === baseUrl) return u.href;
+      } catch {
+        /* noop */
       }
-      return target.toString();
+      return baseUrl; // fallback to site root on the correct host
     },
   },
 });
