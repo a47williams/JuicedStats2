@@ -1,28 +1,23 @@
-"use client";
+// app/account/UpgradeGate.tsx
+import { auth } from "@/lib/auth";
+import { redirect } from "next/navigation";
 
-import { useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+type Props = {
+  children: React.ReactNode;
+  /** When false, the gate will NOT redirect (use this on the Account page). */
+  allowRedirect?: boolean;
+};
 
-/**
- * If a logged-out user lands on /account?upgrade=1, send them to Sign In.
- */
-export default function UpgradeGate({
-  isLoading,
-  userEmail,
-}: {
-  isLoading: boolean;
-  userEmail: string | null;
-}) {
-  const sp = useSearchParams();
-  const router = useRouter();
+export default async function UpgradeGate({ children, allowRedirect = true }: Props) {
+  const session = await auth();
+  const plan = (session?.user as any)?.plan ?? "FREE";
+  const isPro = plan === "PRO";
 
-  useEffect(() => {
-    const wantsUpgrade = sp.get("upgrade") === "1";
-    if (!isLoading && wantsUpgrade && !userEmail) {
-      const cb = "/account?upgrade=1";
-      router.push(`/api/auth/signin?callbackUrl=${encodeURIComponent(cb)}`);
-    }
-  }, [sp, isLoading, userEmail, router]);
+  // On pages that are NOT the account page, we can redirect non-pro users
+  if (!isPro && allowRedirect) {
+    // send them to the Account page where the upgrade UI lives
+    redirect("/account?upgrade=1");
+  }
 
-  return null;
+  return <>{children}</>;
 }
