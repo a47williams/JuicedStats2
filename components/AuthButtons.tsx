@@ -1,41 +1,42 @@
 // components/AuthButtons.tsx
-"use client";
-
-import { signIn, signOut, useSession } from "next-auth/react";
 import Link from "next/link";
+import { auth, signOut } from "@/lib/auth";
 
-export function SignInButton() {
+export default async function AuthButtons() {
+  const session = await auth();
+
+  if (!session?.user) {
+    return (
+      <Link
+        href="/login"
+        className="rounded-lg px-3 py-1.5 text-sm font-medium bg-neutral-800 text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
+      >
+        Sign in
+      </Link>
+    );
+  }
+
   return (
-    <button onClick={() => signIn("google", { callbackUrl: "/" })} className="px-3 py-2 rounded-md border">
-      Sign in with Google
-    </button>
-  );
-}
-
-export function SignOutButton() {
-  return (
-    <button onClick={() => signOut({ callbackUrl: "/" })} className="px-3 py-2 rounded-md border">
-      Sign out
-    </button>
-  );
-}
-
-export function AccountMenu() {
-  const { data: session, status } = useSession();
-  if (status === "loading") return null;
-
-  return session ? (
     <div className="flex items-center gap-3">
-      <span className="text-sm">Hi, {session.user?.name ?? "user"}</span>
-      <Link href="/account" className="underline">Account</Link>
-      <SignOutButton />
+      <Link
+        href="/account"
+        className="text-sm text-neutral-600 hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-white"
+      >
+        Hi, {session.user.name ?? session.user.email ?? "Account"}
+      </Link>
+      <form
+        action={async () => {
+          "use server";
+          await signOut();
+        }}
+      >
+        <button
+          type="submit"
+          className="rounded-lg px-3 py-1.5 text-sm font-medium border border-neutral-300 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+        >
+          Sign out
+        </button>
+      </form>
     </div>
-  ) : (
-    <SignInButton />
   );
-}
-
-// 👇 default export so you can <AuthButtons />
-export default function AuthButtons() {
-  return <AccountMenu />;
 }
