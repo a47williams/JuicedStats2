@@ -12,19 +12,27 @@ export const metadata: Metadata = {
 
 export default function RootLayout({
   children,
-}: {
-  children: React.ReactNode;
-}) {
+}: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    // Default to dark: add className="dark"
+    <html lang="en" className="dark" suppressHydrationWarning>
+      <head>
+        {/* Optional: honor a saved preference while defaulting to dark */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              try {
+                const t = localStorage.getItem('theme');
+                if (t === 'light') document.documentElement.classList.remove('dark');
+                else document.documentElement.classList.add('dark');
+              } catch {}
+            `,
+          }}
+        />
+      </head>
       <body
         className={`${inter.className} min-h-dvh bg-neutral-50 text-neutral-900 antialiased dark:bg-neutral-950 dark:text-neutral-50`}
       >
-        {/*
-          If you have a Providers component for Theme/Auth, you can wrap children with it:
-          <Providers>{children}</Providers>
-          Leaving it out avoids build breaks if that file was moved/renamed.
-        */}
         {children}
       </body>
     </html>
