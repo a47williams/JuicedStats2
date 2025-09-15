@@ -1,40 +1,41 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useTheme } from "next-themes";
 
 export default function ThemeToggle() {
-  const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const [theme, setTheme] = useState<"light" | "dark">("dark");
 
-  if (!mounted) {
-    // Avoid hydration mismatch
-    return (
-      <button
-        aria-label="Toggle theme"
-        className="rounded-md border px-3 py-1.5 text-sm border-neutral-800 bg-neutral-900/40"
-        disabled
-      >
-        …
-      </button>
-    );
+  // Hydration-safe init: read saved theme or media query
+  useEffect(() => {
+    setMounted(true);
+    try {
+      const saved = localStorage.getItem("theme") as "light" | "light" | null;
+      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      const t = (saved as "light" | "dark" | null) ?? (prefersDark ? "dark" : "light");
+      setTheme(t);
+      document.documentElement.classList.toggle("dark", t === "dark");
+    } catch {
+      document.documentElement.classList.add("dark");
+    }
+  }, []);
+
+  if (!mounted) return null;
+
+  function toggle() {
+    const t = theme === "dark" ? "light" : "dark";
+    setTheme(t);
+    try { localStorage.setItem("theme", t); } catch {}
+    document.documentElement.classList.toggle("dark", t === "dark");
   }
-
-  const isDark = theme !== "light";
-  const next = isDark ? "light" : "dark";
 
   return (
     <button
-      onClick={() => setTheme(next)}
+      onClick={toggle}
       aria-label="Toggle theme"
-      className="
-        rounded-md px-3 py-1.5 text-sm font-medium
-        border bg-white/70 text-neutral-900 hover:bg-white
-        dark:border-neutral-800 dark:bg-neutral-900/60 dark:text-neutral-200 dark:hover:bg-neutral-900
-      "
+      className="rounded-md border px-2 py-1 text-xs border-neutral-300 hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
     >
-      {isDark ? "Light" : "Dark"}
+      {theme === "dark" ? "Light" : "Dark"}
     </button>
   );
 }
