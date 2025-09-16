@@ -6,10 +6,9 @@ import { prisma } from "@/lib/prisma";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma),
-  session: { strategy: "database" }, // keep DB sessions
+  session: { strategy: "database" },
   trustHost: true,
-  secret: process.env.AUTH_SECRET,   // <-- add this line
-  // debug: true, // optional while testing
+  secret: process.env.AUTH_SECRET, // <— required in prod
   providers: [
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID!,
