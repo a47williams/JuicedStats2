@@ -1,25 +1,18 @@
 // lib/auth.ts
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
+import { PrismaAdapter } from "@auth/prisma-adapter";
+import { prisma } from "@/lib/prisma";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  // keep it minimal while we stabilize sign-in
-  secret: process.env.AUTH_SECRET,
-  session: { strategy: "jwt" }, // TEMP: we’ll switch back to DB sessions after login works
+  adapter: PrismaAdapter(prisma),
+  // NOTE: v5 defaults to JWT sessions; no `session: { strategy: "database" }`.
+  // `trustHost` is optional; with NEXTAUTH_URL set you don't need it.
   providers: [
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      allowDangerousEmailAccountLinking: true,
     }),
   ],
-  pages: { signIn: "/login" },
-  callbacks: {
-    async redirect({ url, baseUrl }) {
-      try {
-        const u = new URL(url, baseUrl);
-        if (u.origin === baseUrl) return u.href;
-      } catch {}
-      return baseUrl;
-    },
-  },
 });
