@@ -1,14 +1,13 @@
 // app/api/billing/portal/route.ts
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth"; // OK to use; does not export GET/POST here
+import { auth } from "@/lib/auth";
 
 export async function POST() {
   const session = await auth();
   if (!session?.user?.email) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-
-  // TODO: wire to Stripe portal later. This stub unblocks the build.
+  // TODO: Stripe portal session creation
   return NextResponse.json({ ok: true });
 }
 
