@@ -6,9 +6,10 @@ import { prisma } from "@/lib/prisma";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma),
-  session: { strategy: "database" },
+  session: { strategy: "database" }, // keep DB sessions
   trustHost: true,
-  // debug: true, // enable after this step only if needed
+  secret: process.env.AUTH_SECRET,   // <-- add this line
+  // debug: true, // optional while testing
   providers: [
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID!,
@@ -23,7 +24,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const u = new URL(url, baseUrl);
         if (u.origin === baseUrl) return u.href; // same-origin only
       } catch {}
-      return baseUrl; // fallback
+      return baseUrl;
     },
   },
 });
