@@ -4,10 +4,15 @@ import Google from "next-auth/providers/google";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "@/lib/prisma";
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
+export const {
+  auth,
+  signIn,
+  signOut,
+  handlers: { GET, POST },
+} = NextAuth({
   adapter: PrismaAdapter(prisma),
-  // NOTE: v5 defaults to JWT sessions; no `session: { strategy: "database" }`.
-  // `trustHost` is optional; with NEXTAUTH_URL set you don't need it.
+  // v5 defaults to JWT sessions; no `session: { strategy: "database" }`
+  // Keep `trustHost` out unless you truly need it.
   providers: [
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID!,
@@ -15,4 +20,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       allowDangerousEmailAccountLinking: true,
     }),
   ],
+  // If you keep both, that's fine (AUTH_SECRET / NEXTAUTH_SECRET).
+  secret: process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET,
 });
