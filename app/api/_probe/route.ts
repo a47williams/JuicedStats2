@@ -7,7 +7,6 @@ export async function GET() {
     host: h.get("host"),
     proto: h.get("x-forwarded-proto"),
     forwardedHost: h.get("x-forwarded-host"),
-    path: new URL(h.get("x-url") || "/", "http://x").pathname,
     cookies: cookies().getAll().map(c => c.name),
     ts: new Date().toISOString(),
   };
