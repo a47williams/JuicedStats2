@@ -1,9 +1,5 @@
-// app/account/page.tsx
-// app/account/page.tsx
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
-// (rest of the file unchanged)
 
 import { auth } from "@/lib/auth";
 import UpgradeButton from "./UpgradeButton";

@@ -1,9 +1,7 @@
-"use client";
-// app/account/page.tsx
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// (rest of the file unchanged)
+"use client";
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
